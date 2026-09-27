@@ -94,7 +94,13 @@ class LiveEngine:
                     continue
                 started = time.perf_counter()
                 result = self.run_tool(name, params)
-                trace.step("tool", {"tool": name, "params": params}, started=started)
+                # 契约 §6：调试面板要能看到“执行了什么、返回了什么”。
+                # 结果也留在这一步里；下一轮的提示词里虽然有同样一份，但那是给模型看的。
+                trace.step(
+                    "tool",
+                    {"tool": name, "params": params, "result": _trace_result(result)},
+                    started=started,
+                )
                 if name == "search_kb":
                     retrieved[json.dumps(params, ensure_ascii=False)] = result.get("results", [])
                 elif "error" not in result:
@@ -195,6 +201,17 @@ class LiveEngine:
         for value in allowed:
             derived.extend([round(value, 2), round(value)])
         return sorted(set(allowed + derived))
+
+
+def _trace_result(result: Any, limit: int = 4000) -> Any:
+    """工具结果进 trace 前先封顶：一次 SQL 可能返回几十行，不能把 trace 撑爆。"""
+    try:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return {"unserializable": True}
+    if len(text) <= limit:
+        return result
+    return {"truncated": True, "size": len(text), "preview": text[:limit]}
 
 
 def _numbers_in(text: str) -> list[float]:
