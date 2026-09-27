@@ -639,3 +639,95 @@ def test_asking_for_a_store_s_public_phone_is_still_allowed(ask):
     """
     body = ask("S02 门店的联系电话是多少？")
     assert body["answer_type"] != "refusal", "对外电话是公开资料，不该拒答"
+
+
+@pytest.mark.parametrize(
+    "question, history, expect_docs, forbid_docs",
+    [
+        (
+            "618 当天 S02 的牛肉poke 卖了多少份？达到目标了吗？",
+            [],
+            ["KB-023"],
+            ["KB-024"],
+        ),
+        (
+            "那 6 月的时候呢？",
+            [{"question": "储值充值现在的赠送规则是什么？", "answer": "按现行版本执行。"}],
+            ["KB-010"],
+            [],
+        ),
+    ],
+)
+def test_live_mode_search_keeps_the_version_context(
+    service, question, history, expect_docs, forbid_docs
+):
+    """live 模式下模型调 `search_kb`，规划器算好的版本上下文不能丢。
+
+    模型只会给 `query` / `top_k`。**哪些文档该排掉、该按哪个时点选版本，
+    是规划器算出来的**（`plan.year` / `plan.as_of` / `plan.slots["historical"]`）：
+    "618 当天"是 2026 年的事，2025 年那份归档方案（KB-024，活动价 ¥25）不该出现；
+    "那 6 月的时候呢"要按 2026-06-30 这个时点取**当时生效**的 KB-010，而不是现行的 KB-011。
+
+    修之前 `search_kb` 只把 query 原样递给检索器，上下文全丢。后果两头：
+    现行题里把 KB-024 端上来，模型顺口讲了去年的价（公开题 V01、H02 都栽在这上面）；
+    追问旧版时又检索不到 KB-010，模型只能如实说"旧版我检索不到"（V03 丢 2 分）。
+    """
+    from kbqa.live import LiveEngine
+    from kbqa.llm import LLMReply
+    from kbqa.trace import Trace
+
+    answer_text = "这一版的规定我按检索到的原文回答。"
+
+    class OneSearchClient:
+        """只调一次 search_kb 就作答的假客户端。"""
+
+        model = "stub"
+
+        def __init__(self, query):
+            self.query = query
+
+        def chat_with_retry(self, messages, tools=None, budget=None, on_call=None):
+            if tools:
+                call = {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "search_kb",
+                        "arguments": json.dumps({"query": self.query, "top_k": 5}),
+                    },
+                }
+                return LLMReply(
+                    message={"role": "assistant", "content": "", "tool_calls": [call]},
+                    finish_reason="tool_calls",
+                    content="",
+                    tool_calls=[call],
+                    elapsed=0.0,
+                )
+            return LLMReply(
+                message={"role": "assistant", "content": answer_text},
+                finish_reason="stop",
+                content=answer_text,
+                tool_calls=[],
+                elapsed=0.0,
+            )
+
+    plan = service.planner.plan(question, history)
+    engine = LiveEngine(
+        OneSearchClient(plan.search_query),
+        service.answerer,
+        service.run_tool,
+        service.settings.today.isoformat(),
+        service.data_period,
+        budget=60.0,
+    )
+    trace = Trace("t-version-ctx", plan.question)
+    engine.answer(plan, trace, history)
+
+    steps = trace.as_dict()["steps"]
+    searched = [s for s in steps if s["step"] == "tool" and s["detail"]["tool"] == "search_kb"]
+    assert searched, "这一轮没有调 search_kb，用例证明不了什么"
+    doc_ids = [item["doc_id"] for item in searched[0]["detail"]["result"]["results"]]
+    for doc_id in expect_docs:
+        assert doc_id in doc_ids, "检索里少了 %s：%s" % (doc_id, doc_ids)
+    for doc_id in forbid_docs:
+        assert doc_id not in doc_ids, "检索里不该出现 %s：%s" % (doc_id, doc_ids)
