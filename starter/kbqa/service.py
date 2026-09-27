@@ -67,7 +67,9 @@ class Service:
         return {
             "status": "ok",
             "llm_mode": self.settings.llm_mode,
-            "kb_docs": sum(1 for path in self.settings.kb_dir.rglob("*") if path.is_file()),
+            # 契约 §1：数的是实际进了索引的文档，不是目录里的文件数。
+            # 目录里的 README.md 没有 KB 编号，不算文档；数文件会多报。
+            "kb_docs": len(self.index.docs_meta),
             "kb_chunks": len(self.index.chunks),
             "valid_sales_rows": self.tools.valid_sales_rows(),
             "today": self.settings.today.isoformat(),
@@ -153,7 +155,9 @@ class Service:
                 return Answer(answer="没有收到问题内容，请再说一次。", answer_type="clarify")
             history = self.sessions.history(session_id)
             started = time.perf_counter()
-            plan = self.planner.plan(question)
+            # history 必须传进规划器：追问还原（“那 7 月呢”）全靠它。
+            # 之前这里漏传了，规划器永远以为没有上文，所有追问都被判成“缺少上下文”。
+            plan = self.planner.plan(question, history)
             trace.step("plan", plan.as_trace(), started=started)
             answer = self._run_engine(plan, trace, history)
             self.sessions.append(
