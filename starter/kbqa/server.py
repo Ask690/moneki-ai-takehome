@@ -8,12 +8,18 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .config import PROJECT_DIR
 from .service import Service
 
 app = FastAPI(title="经营看板 + 问答服务", version="0.9.3")
 _service: Optional[Service] = None
+
+#: 前端静态文件目录。看板是纯 HTML/CSS/JS，不需要 node 与构建步骤，
+#: 由本服务直接托管，评审按 README 三步起服务就能打开。
+WEB_DIR = PROJECT_DIR / "web"
 
 
 def service() -> Service:
@@ -105,6 +111,18 @@ def trace(trace_id: str):
     return payload
 
 
+@app.get("/api/metrics/top_products")
+def metrics_top_products(
+    start: str = Query(...),
+    end: str = Query(...),
+    store_id: Optional[str] = None,
+    limit: int = Query(default=10, ge=1, le=100),
+):
+    """Top N 商品：口径与 `/api/metrics/summary` 同一套清洗表。"""
+    bad = _bad_date(start, end)
+    return bad or service().tools.top_products(start, end, store_id, limit)
+
+
 @app.get("/api/data_quality")
 def data_quality() -> dict:
     """第一关的“数据质量”面板：清洗掉了多少行、各因为什么。"""
@@ -114,3 +132,23 @@ def data_quality() -> dict:
         "data_period": current.data_period,
         "kb_warnings": current.index.warnings,
     }
+
+
+@app.get("/api/catalog")
+def catalog() -> dict:
+    """看板筛选项：门店与商品清单，以及数据覆盖的日期区间。
+
+    清单从清洗库读，不写死任何编号——评审换一份 data/ 重建之后，前端跟着变。
+    """
+    current = service()
+    return {
+        "stores": current.tools.stores(),
+        "products": current.tools.products(),
+        "data_period": current.data_period,
+        "today": current.settings.today.isoformat(),
+    }
+
+
+# 前端由本服务托管，放在最后注册：路由按注册顺序匹配，/api/* 先于静态目录。
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

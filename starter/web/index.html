@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>经营看板 · 连锁餐饮</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">经营看板</span>
+    <span class="brand-sub">连锁餐饮 · 5 家门店</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="功能切换">
+    <button class="tab is-active" role="tab" data-tab="dashboard" aria-selected="true">数据看板</button>
+    <button class="tab" role="tab" data-tab="chat" aria-selected="false">问答助手</button>
+    <button class="tab" role="tab" data-tab="debug" aria-selected="false">调试面板</button>
+  </nav>
+
+  <div class="topbar-meta">
+    <span class="muted" id="today-label">—</span>
+    <span class="badge badge-neutral" id="llm-mode">—</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ================= 第一关：数据看板 ================= -->
+  <section class="panel is-active" id="panel-dashboard" role="tabpanel">
+
+    <div class="filters card">
+      <label class="field">
+        <span>开始日期</span>
+        <input type="date" id="start-date">
+      </label>
+      <label class="field">
+        <span>结束日期</span>
+        <input type="date" id="end-date">
+      </label>
+      <label class="field">
+        <span>门店</span>
+        <select id="store-select"><option value="">全部门店</option></select>
+      </label>
+      <div class="field presets">
+        <span>快捷区间</span>
+        <div class="preset-row">
+          <button type="button" class="btn-ghost" data-preset="7">最近 7 天</button>
+          <button type="button" class="btn-ghost" data-preset="30">最近 30 天</button>
+          <button type="button" class="btn-ghost" data-preset="month">上月</button>
+          <button type="button" class="btn-ghost" data-preset="all">全部区间</button>
+        </div>
+      </div>
+      <div class="field field-action">
+        <button type="button" class="btn-primary" id="refresh-btn">查询</button>
+      </div>
+    </div>
+
+    <div class="alert" id="dash-error" hidden></div>
+
+    <div class="range-note muted" id="range-note"></div>
+
+    <section class="kpis" id="summary-cards" aria-label="概览指标"></section>
+
+    <section class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <h2>营业额趋势</h2>
+          <span class="muted" id="trend-sub"></span>
+        </div>
+        <div class="chart" id="trend-chart"></div>
+        <p class="chart-note muted">
+          口径：净营业额 = 销售行 + 退款行（KB-001）。悬停查看当天订单数与客单价。
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>数据质量</h2>
+          <span class="muted" id="quality-sub"></span>
+        </div>
+        <div id="quality-body"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Top 10 商品</h2>
+        <span class="muted">按净营业额排序，口径与概览卡片一致</span>
+      </div>
+      <div id="top-products"></div>
+    </section>
+  </section>
+
+  <!-- ================= 第三关：问答助手 ================= -->
+  <section class="panel" id="panel-chat" role="tabpanel">
+    <div class="chat-wrap card">
+      <div class="chat-head">
+        <span class="muted">会话 ID：<code id="session-id">—</code></span>
+        <button type="button" class="btn-ghost" id="new-session-btn">新会话</button>
+      </div>
+
+      <div class="chat-log" id="chat-log">
+        <div class="chat-empty" id="chat-empty">
+          <p>问几句试试。可以只查数据库、只查公司文档，也可以两样一起问。</p>
+          <div class="examples" id="chat-examples"></div>
+        </div>
+      </div>
+
+      <form class="chat-form" id="chat-form">
+        <textarea id="chat-input" rows="2" placeholder="例如：618 当天 S02 的牛肉poke 卖了多少份，达到目标了吗？"></textarea>
+        <button type="submit" class="btn-primary" id="chat-send">发送</button>
+      </form>
+      <p class="chat-note muted">
+        模型思考加上多轮查数，一次回答可能要几十秒，期间请勿刷新页面。
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= 第四关：调试面板 ================= -->
+  <section class="panel" id="panel-debug" role="tabpanel">
+
+    <div class="card debug-head">
+      <label class="field field-grow">
+        <span>trace_id</span>
+        <input type="text" id="trace-input" placeholder="t-20260901-0001" spellcheck="false">
+      </label>
+      <div class="field field-action">
+        <button type="button" class="btn-primary" id="trace-load-btn">加载</button>
+      </div>
+      <div class="field field-action">
+        <button type="button" class="btn-ghost" id="trace-reload-btn">重新加载</button>
+      </div>
+      <span class="muted" id="trace-status"></span>
+    </div>
+
+    <div id="trace-body">
+      <div class="card empty-card">
+        <p>在「问答助手」里问一句，点回答旁边的「查看调试」，或者把 trace_id 粘到上面。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>检索试跑</h2>
+        <span class="muted">只做检索、不调用模型，用来单独看检索质量</span>
+      </div>
+      <div class="retrieve-form">
+        <input type="text" id="retrieve-query" placeholder="例如：外卖订单多久内可以退款" spellcheck="false">
+        <label class="inline-field">top_k <input type="number" id="retrieve-topk" value="5" min="1" max="20"></label>
+        <button type="button" class="btn-ghost" id="retrieve-btn">检索</button>
+      </div>
+      <div id="retrieve-body"></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
