@@ -9,6 +9,18 @@ from typing import Optional
 from .aliases import AliasTable
 from .tokenizer import normalise
 
+
+def _squeezed(text: str) -> str:
+    """挤掉全部空白，用来比实体名。
+
+    中文输入法在汉字和英文之间自动补空格是常态（“牛肉 poke”），
+    而商品名在库里是连着写的（“牛肉poke”）。不挤掉的话，一个空格就能让
+    商品解析成 None，整句**悄悄退回门店级**——门店和商品都还写在问句里，
+    用户看不出自己问的东西被换掉了。只用于实体名比对，不进分词与检索。
+    """
+    return re.sub(r"\s+", "", text)
+
+
 #: 指标的说法 -> 指标字段。这是语言词表，不是答案。
 METRIC_WORDS: list[tuple[str, tuple[str, ...]]] = [
     ("refund_amount", ("退款金额", "退了多少钱", "退款额", "退款总额", "退款多少")),
@@ -183,10 +195,11 @@ class Catalog:
             if upper in {product["product_id"] for product in self.products}:
                 return upper, None
             return None, upper
+        squeezed = _squeezed(lowered)
         matches = [
             product
             for product in self.products
-            if normalise(product["product_name"]) in lowered
+            if _squeezed(normalise(product["product_name"])) in squeezed
         ]
         if matches:
             best = max(matches, key=lambda product: len(product["product_name"]))
