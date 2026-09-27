@@ -17,6 +17,8 @@ _PRICE = re.compile(r"(?:调整为|调为|现价|活动价|售价为|售价|价�
 #: 解释异常时优先挑带因果说明的句子，而不是标题或整改措施。分两级。
 _CAUSE_EXPLICIT = re.compile(r"(原因|因为|由于|导致|受.{0,4}影响)")
 _CAUSE_EVENT = re.compile(r"(故障|停业|整改|暂停|闭店|停售|检查|预警|停电|施工)")
+#: 目标句自己声明了“全门店合计”这种宽口径时的说法。
+_CHAIN_WIDE = re.compile(r"全(部)?门店|全店")
 
 
 class HybridAnswers:
@@ -76,10 +78,8 @@ class HybridAnswers:
                 match = _TARGET.search(sentence)
                 if not match:
                     continue
-                if plan.product_id:
-                    name = self.catalog.product_name(plan.product_id)
-                    if normalise(name) not in normalise(sentence) and not self._same_topic(hit, plan):
-                        continue
+                if not self._target_scope_ok(plan, hit, sentence):
+                    continue
                 citation = self.facts.cite(hit.doc_id, sentence)
                 if citation:
                     return (
@@ -89,6 +89,29 @@ class HybridAnswers:
                         self.retriever.index.docs_meta.get(hit.doc_id, {}),
                     )
         return None, "", None, {}
+
+    def _target_scope_ok(self, plan: Plan, hit: Hit, sentence: str) -> bool:
+        """目标句的口径必须和问题的口径对得上，否则这个比较没有意义。
+
+        知识库里“目标”句有三种口径，一一对上：
+
+        1. **单品口径**（KB-023“当天牛肉poke 目标销量 120 份”）：问题必须落在
+           这个单品上——句子里提到它，或者整篇文档都在讲它（备货那句只写“牛肉”，
+           靠的是这一条）。
+        2. **全门店合计口径**（KB-024“全部门店合计目标销量 300 份”、
+           KB-028“全门店合计目标销量 900 杯”）：问题必须**没限定门店**。
+           拿 S02 一家的销量去比全门店的目标，同样是错比。
+        3. **口径没说清**：判不了，宁可不说。
+
+        修之前这里只有第 1 条的 `if plan.product_id:`：问题没落到单品上时
+        校验**完全不执行**，于是“S02 全店 165 件 vs 牛肉poke 目标 120 份，
+        已达标，超出 45 份”——一个自信的错答案。方向也反了：
+        不知道问的是哪个单品，恰恰是最需要校验的时候。
+        """
+        if plan.product_id:
+            name = self.catalog.product_name(plan.product_id)
+            return normalise(name) in normalise(sentence) or self._same_topic(hit, plan)
+        return plan.store_id is None and bool(_CHAIN_WIDE.search(sentence))
 
     def _same_topic(self, hit: Hit, plan: Plan) -> bool:
         name = self.catalog.product_name(plan.product_id) if plan.product_id else ""
