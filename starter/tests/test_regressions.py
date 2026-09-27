@@ -88,3 +88,42 @@ def test_run_sql_rejects_writes(service, sql):
 
     rows = service.tools.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0]
     assert rows == 18290, "数据库一个字节都不该被改动"
+def test_net_revenue_includes_refund_rows(service):
+    """KB-001 §4：净营业额 = 销售行之和 + 退款行之和（退款为负，效果是相减）。
+
+    修之前 SQL 里写死了 `is_refund = 0`，退款行被整体排除，净营业额偏高。
+    这里直接从库里分别算出两半来对，而不是拿被测代码的另一个字段互相印证。
+    """
+    conn = service.tools.conn
+    sales_cents, refund_cents = conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN is_refund = 0 THEN amount_cents END), 0),"
+        "       COALESCE(SUM(CASE WHEN is_refund = 1 THEN amount_cents END), 0)"
+        "  FROM sales_clean"
+    ).fetchone()
+    assert refund_cents < 0, "退款行的金额本身是负数"
+
+    period = service.data_period
+    result = service.tools.query_metrics(period["start"], period["end"])
+    assert result["net_revenue"] == pytest.approx(
+        (sales_cents + refund_cents) / 100, abs=0.02
+    )
+    assert result["refund_amount"] == pytest.approx(-refund_cents / 100, abs=0.02)
+def test_aov_denominator_is_valid_orders_not_rows(service):
+    """KB-001 §4：客单价 = 净营业额 ÷ 有效订单数。
+
+    修之前分母用的是行数，客单价被系统性低估。期望值直接从库里数出来，
+    不拿被测代码的另一个字段互相印证——那种写法在缺陷状态下照样能自洽地通过。
+    """
+    conn = service.tools.conn
+    orders = conn.execute(
+        "SELECT COUNT(DISTINCT order_id) FROM sales_clean WHERE is_refund = 0"
+    ).fetchone()[0]
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM sales_clean WHERE is_refund = 0"
+    ).fetchone()[0]
+    assert orders < rows, "一个订单有多行，否则这条用例证明不了什么"
+
+    period = service.data_period
+    result = service.tools.query_metrics(period["start"], period["end"])
+    assert result["orders"] == orders
+    assert result["aov"] == pytest.approx(result["net_revenue"] / orders, rel=1e-4)
