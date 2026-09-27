@@ -15,15 +15,27 @@ from .chunker import CHUNKER_VERSION, Chunk, chunk_documents
 from .loader import Document, load_knowledge_base
 from .tokenizer import TOKENIZER_VERSION, tokenize
 
-INDEX_VERSION = "bm25-3"
+INDEX_VERSION = "bm25-4"
 K1 = 1.5
 B = 0.75
 
 
 def content_key(kb_dir: Path) -> str:
-    """缓存键：三个版本号拼起来哈希一下。改了切块或分词，键就变，缓存自动失效。"""
+    """缓存键 = 算法版本号 + 知识库每个文件的路径与内容哈希。
+
+    只哈希版本号是不够的：评审时会整体替换 `knowledge_base/`，算法没改、版本号没变，
+    缓存键就还是老的值，仓库里提交的 `.cache/index.json` 会被继续当成有效缓存用，
+    结果检索的是上一份知识库。所以内容必须进键。
+    """
     digest = hashlib.sha256()
     digest.update(("%s|%s|%s\n" % (INDEX_VERSION, CHUNKER_VERSION, TOKENIZER_VERSION)).encode())
+    if kb_dir.exists():
+        for path in sorted(kb_dir.rglob("*")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            digest.update(path.relative_to(kb_dir).as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
 
