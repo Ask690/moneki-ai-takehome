@@ -9,7 +9,9 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-SUPPORTED_SUFFIXES = {".md", ".markdown"}
+#: 交接文档说 md/txt/html 三种格式都支持，这里就都得进索引。
+#: 少一种，`/api/health` 的 `kb_docs` 就与契约第 1 节的 35 篇对不上。
+SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".html", ".htm"}
 
 #: 文件名开头的编号就是 doc_id，与文件格式无关（契约 §0）。
 _DOC_ID = re.compile(r"^(KB-\d+)")
@@ -63,7 +65,12 @@ class Document:
             "doc_id": self.doc_id,
             "title": self.title,
             "type": self.doc_type,
-            "state": self.status,
+            # 键名必须是 `status`：`Retriever._eligible` 与 `DocFacts.version_note`
+            # 读的都是 `meta["status"]`。这里曾经写成 `state`，写进去的键没人读、
+            # 读的键没人写，于是“已废止的版本不再参与检索”这条规则静默失效，
+            # 被取代的 v1 一直排在现行的 v2 前面。改键名的同时要升 INDEX_VERSION，
+            # 否则磁盘上那份老索引（只有 state）会被继续当成有效缓存。
+            "status": self.status,
             "effective_from": self.effective_from.isoformat() if self.effective_from else None,
             "superseded_by": self.superseded_by,
             "stores": self.stores,
@@ -77,11 +84,50 @@ class Document:
 
 
 _HTML_TITLE = re.compile(r"<title>(.*?)</title>", re.S | re.I)
+_HTML_DROP = re.compile(r"<(script|style|noscript)\b.*?</\1\s*>", re.S | re.I)
+_HTML_BREAK = re.compile(
+    r"</\s*(p|div|li|tr|h[1-6]|table|section|article|blockquote)\s*>"
+    r"|<\s*br\s*/?\s*>|</\s*td\s*>|</\s*th\s*>",
+    re.I,
+)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_BLANK_LINES = re.compile(r"\n{3,}")
 
 
 def decode_bytes(raw: bytes, path: Path, warnings: list[str]) -> str:
-    """统一按 UTF-8 读。个别老文件里有怪字符，忽略掉就行，不影响检索。"""
+    """按 UTF-8 读，读不动再按 GBK 读。
+
+    知识库里有旧 OA 导出的 `.txt` 是 GBK 编码的，直接按 UTF-8 解码会整篇变成乱码
+    （`errors="ignore"` 更糟：字全没了，检索不到，引用也核对不过）。
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for encoding in ("gb18030", "gbk"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        warnings.append("按 %s 解码：%s" % (encoding.upper(), path.name))
+        return text
+    warnings.append("无法确定编码，按 UTF-8 忽略坏字节：%s" % path.name)
     return raw.decode("utf-8", errors="ignore")
+
+
+def html_to_text(raw_html: str) -> str:
+    """把 HTML 变成可见正文。
+
+    评测脚本核对 `quote` 时读的也是“可见正文”（去掉标签、`<script>`、`<style>`），
+    所以入库的必须是同一个东西：留着标签的话，引用里会混进标签文字，逐字比对过不了。
+    """
+    text = _HTML_DROP.sub(" ", raw_html)
+    text = _HTML_BREAK.sub("\n", text)
+    text = _HTML_TAG.sub("", text)
+    text = html_module.unescape(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.strip() for line in text.splitlines())
+    return _BLANK_LINES.sub("\n\n", text).strip()
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
@@ -176,10 +222,14 @@ def load_document(path: Path) -> Optional[Document]:
     if fmt == "md":
         meta, text = parse_front_matter(text)
     elif fmt == "html":
-        # html 直接按文本入库，标签也就那么几个，BM25 自己会忽略。
+        # 标题要在去标签之前取，去完就没了。
         match_title = _HTML_TITLE.search(text)
         html_title = html_module.unescape(match_title.group(1).strip()) if match_title else ""
         meta = {"title": html_title.split("-")[0].strip() or html_title}
+        text = html_to_text(text)
+    else:
+        # .txt：老文件有的带 YAML 头、有的不带，带就解析。
+        meta, text = parse_front_matter(text)
 
     match = _DOC_ID.match(path.name)
     doc_id = str(meta.get("doc_id") or (match.group(1) if match else "")).strip()
@@ -210,6 +260,14 @@ def load_document(path: Path) -> Optional[Document]:
 
 def _sorted_unique(values) -> list[str]:
     return sorted({value.upper() for value in values})
+
+
+def doc_status(meta: dict) -> str:
+    """读一篇文档的状态（现行 / 已废止）。
+
+    索引是磁盘缓存，升级过程中可能读到旧格式的那一份，所以 `state` 也认。
+    """
+    return str(meta.get("status") or meta.get("state") or "").strip()
 
 
 def _guess_type(filename: str, text: str) -> str:
