@@ -756,6 +756,29 @@ def test_a_space_inside_a_product_name_does_not_break_resolution(service):
     assert plan.product_id == "P06", "商品名中间多一个空格，商品不该解析不出来"
 
 
+def test_a_rate_is_never_read_as_a_quantity_target(service):
+    """“连带率目标是每 2 单里至少有 1 杯饮料”不是销量目标。
+
+    KB-023 第三节里并排写着两个“目标”：第 31 行的单品销量目标（120 份），
+    第 32 行的连带率（每 2 单至少 1 杯饮料）。`_TARGET` 抓的是
+    “目标…<数字><单位>”，第 32 行正好落进它的窗口：“目标是每 2 单”
+    被读成“目标 2 单”，单位还取成了“单”。
+
+    这一层是在补上面那条作用域护栏时露出来的：护栏跳掉第 31 行之后，
+    第 32 行顶上来，回答变成“目标为 2 单……实际 4683 单，已达标，超出 4681 单”
+    ——4683 是净营业额（元），却被贴上“单”的单位去比一个连带率，
+    比原来那个错答案更离谱。
+
+    修法：`目标` 与数字之间出现“每”就不认——那是比率，不是目标量。
+    """
+    plan = service.planner.plan("618 当天 S02 达到目标了吗？", [])
+    result = service.answerer._search(plan, window=("2026-06-18", "2026-06-18"))
+    hit_ids = [hit.doc_id for hit in result.hits]
+    assert "KB-023" in hit_ids, "KB-023 不在命中里，用例证明不了什么：%s" % hit_ids
+    target, unit, _, _ = service.answerer._find_target(plan, result)
+    assert target is None, "连带率被当成了目标值：%s %s" % (target, unit)
+
+
 @pytest.mark.parametrize(
     "question",
     [
