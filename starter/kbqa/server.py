@@ -53,6 +53,10 @@ class RetrieveRequest(BaseModel):
     top_k: int = Field(default=5, ge=1)
 
 
+class ModeRequest(BaseModel):
+    mode: Optional[Any] = None
+
+
 def _bad_date(*values: str) -> Optional[JSONResponse]:
     for value in values:
         try:
@@ -68,6 +72,19 @@ def _bad_date(*values: str) -> Optional[JSONResponse]:
 @app.get("/api/health")
 def health() -> dict:
     return service().health()
+
+
+@app.post("/api/mode")
+def set_mode(request: ModeRequest):
+    """手动切换问答引擎：`live` / `mock` / `auto`。
+
+    只影响这个进程接下来的问答，重启即回到环境变量决定的模式（见 `Service.set_engine`）。
+    没有 Key 时切 `live` 会 400——不能默默答应下来什么都不做。
+    """
+    try:
+        return service().set_engine(_as_text(request.mode))
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
 
 
 @app.get("/api/metrics/summary")

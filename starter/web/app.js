@@ -107,6 +107,8 @@ const state = {
   chartBound: false,
   trendDays: [],
   lastTraceId: null,
+  answerEngine: 'mock',
+  modeSwitchable: false,
 };
 
 const ANSWER_TYPES = {
@@ -181,15 +183,69 @@ async function loadHealth() {
   try {
     const health = await apiGet('/api/health');
     $('#today-label').textContent = '今天 ' + health.today;
-    const badge = $('#llm-mode');
-    const live = health.llm_mode === 'live';
-    badge.textContent = live ? '模型已接入' : '降级模式（未配置 Key）';
-    badge.className = 'badge ' + (live ? 'badge-data' : 'badge-clarify');
-    badge.title = live
-      ? '已配置大模型，问答走模型 + 工具调用'
-      : '未配置大模型，问答走模板路径，/api/chat 仍返回结构化回答';
+    // 有 Key 才谈得上切换：没 Key 时 live 这条路根本不存在，按钮不给点。
+    state.modeSwitchable = health.llm_mode === 'live';
+    renderMode(health);
   } catch (err) {
     $('#today-label').textContent = '服务不可用';
+  }
+}
+
+/** 徽标报的是**实际会走哪条路**（`answer_engine`），不是配置。
+ *
+ * 演示时拨到降级之后，"会不会调用模型/花不花额度"才是要看的那件事；
+ * 配置是什么，鼠标停上去的说明里写着。
+ */
+function renderMode(health) {
+  const engine = health.answer_engine || health.llm_mode;
+  const forced = health.llm_override != null;
+  const live = engine === 'live';
+  // 记在这里而不是 loadHealth 里：切换之后也要跟着更新，
+  // 否则第二次点还是发同一个模式，拨不回去。
+  state.answerEngine = engine;
+
+  const badge = $('#llm-mode');
+  badge.textContent = live ? '模型已接入' : forced ? '降级模式（手动切换）' : '降级模式（未配置 Key）';
+  badge.className = 'badge ' + (live ? 'badge-data' : 'badge-clarify');
+  badge.title = live
+    ? '问答走模型 + 工具调用，每次提问都会真的调用大模型'
+    : forced
+      ? '当前手动切到了降级模式：走纯代码的抽取式路径，不调用大模型。' +
+        '刷新页面不会恢复，重启服务才回到环境变量决定的模式。'
+      : '未配置大模型，问答走模板路径，/api/chat 仍返回结构化回答';
+
+  const btn = $('#llm-toggle');
+  btn.hidden = !state.modeSwitchable;
+  if (btn.hidden) return;
+  btn.disabled = false;
+  btn.textContent = live ? '切到降级' : '切回模型';
+  btn.title = live
+    ? '切到降级模式：不调用大模型，更快也不花额度，但需要多步推理的混合题会退化成模板回答'
+    : '切回 live 模式：问答重新走模型 + 工具调用（这次切换只在这个进程里有效，重启服务即复原）';
+
+  const note = $('#chat-note');
+  if (note) {
+    note.textContent = live
+      ? '模型思考加上多轮查数，一次回答可能要几十秒，期间请勿刷新页面。'
+      : '当前是降级模式：不调用大模型，回答由代码按工具结果渲染，通常一秒内返回。';
+  }
+}
+
+async function toggleMode() {
+  const btn = $('#llm-toggle');
+  const want = state.answerEngine === 'live' ? 'mock' : 'live';
+  btn.disabled = true;
+  try {
+    renderMode(await apiPost('/api/mode', { mode: want }));
+  } catch (err) {
+    // 这个界面里没有用 alert 的地方，错误一律就地显示（和问答失败同一个路子）。
+    // 失败原因放在 title 里：能点到这个按钮，说明 Key 是有的，
+    // 真正会失败的情况是服务没在跑，那看徽标就够了。
+    const badge = $('#llm-mode');
+    badge.textContent = '切换失败';
+    badge.className = 'badge badge-refusal';
+    badge.title = err.message;
+    btn.disabled = false;
   }
 }
 
@@ -1270,6 +1326,8 @@ $('#retrieve-btn').addEventListener('click', runRetrieve);
 $('#retrieve-query').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') runRetrieve();
 });
+
+$('#llm-toggle').addEventListener('click', toggleMode);
 
 /* ============================ 启动 ============================ */
 

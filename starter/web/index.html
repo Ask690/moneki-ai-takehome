@@ -23,6 +23,7 @@
   <div class="topbar-meta">
     <span class="muted" id="today-label">—</span>
     <span class="badge badge-neutral" id="llm-mode">—</span>
+    <button type="button" class="btn-ghost btn-mode" id="llm-toggle" hidden>切换</button>
   </div>
 </header>
 
@@ -113,7 +114,7 @@
         <textarea id="chat-input" rows="2" placeholder="例如：618 当天 S02 的牛肉poke 卖了多少份，达到目标了吗？"></textarea>
         <button type="submit" class="btn-primary" id="chat-send">发送</button>
       </form>
-      <p class="chat-note muted">
+      <p class="chat-note muted" id="chat-note">
         模型思考加上多轮查数，一次回答可能要几十秒，期间请勿刷新页面。
       </p>
     </div>

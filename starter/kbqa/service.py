@@ -37,7 +37,51 @@ class Service:
         self.settings = settings or load_settings()
         self.sessions = SessionStore()
         self.traces = TraceStore()
+        #: 运行期的手动模式覆盖，见 `answer_engine`。只活在进程内存里。
+        self._engine_override: Optional[str] = None
         self.rebuild(only_if_missing=True)
+
+    # -- 引擎选择 ---------------------------------------------------------------
+
+    @property
+    def answer_engine(self) -> str:
+        """下一次提问**实际会走**的引擎：`live` 或 `mock`。
+
+        与 `settings.llm_mode` 分开：那个是**配置**（有没有 Key），这个是被手动
+        开关覆盖之后的实际路由。契约 §1 的 `llm_mode` 一直指前者，预检 P12 认的
+        也是它——所以拨开关不会把预检弄红。
+        """
+        if self._engine_override is not None:
+            return self._engine_override
+        return self.settings.llm_mode
+
+    def engine_state(self) -> dict:
+        """`/api/mode` 与 `/api/health` 一起报的那三个字段。"""
+        return {
+            "llm_mode": self.settings.llm_mode,
+            "answer_engine": self.answer_engine,
+            "llm_override": self._engine_override,
+        }
+
+    def set_engine(self, mode: str) -> dict:
+        """手动切换引擎。`mode` 取 `live` / `mock` / `auto`（=`auto` 跟随环境）。
+
+        只改内存：不落盘、不动环境变量、不改 `settings`。**重启即回到环境变量决定的
+        模式**——演示时拨过头了，重启一下就好，不会留下一个说不清的持久状态。
+        """
+        wanted = (mode or "").strip().lower()
+        if wanted == "auto":
+            self._engine_override = None
+        elif wanted in ("live", "mock"):
+            if wanted == "live" and not self.settings.live:
+                raise ValueError(
+                    "没有配置 Key，切不到 live。三个环境变量（LLM_BASE_URL、LLM_API_KEY、"
+                    "LLM_MODEL）要注入之后再启动服务。"
+                )
+            self._engine_override = wanted
+        else:
+            raise ValueError("mode 只能是 live、mock 或 auto，收到 %r" % (mode,))
+        return self.engine_state()
 
     # -- 启动与重建 -------------------------------------------------------------
 
@@ -72,7 +116,10 @@ class Service:
         report = self.tools.cleaning_report()
         return {
             "status": "ok",
-            "llm_mode": self.settings.llm_mode,
+            # `llm_mode` 是配置，`answer_engine` / `llm_override` 是运行期路由。
+            # `eval/run_eval.py` 会把整个 health 快照进报告，所以哪次跑分是
+            # 降级跑的，报告里自己写着，不靠人记。
+            **self.engine_state(),
             # 契约 §1：数的是实际进了索引的文档，不是目录里的文件数。
             # 目录里的 README.md 没有 KB 编号，不算文档；数文件会多报。
             "kb_docs": len(self.index.docs_meta),
@@ -225,10 +272,24 @@ class Service:
             )
 
     def _run_engine(self, plan, trace: Trace, history: list[dict]) -> Answer:
-        if not self.settings.live or plan.intent == "refusal":
+        # 判的是 `answer_engine` 而不是 `settings.live`：后者只是环境变量的快照，
+        # 手动开关拨不动它。trace 里连**为什么**走这条路一起记下——
+        # 否则一条 mock 的 trace 看起来永远像"没配 Key"。
+        if self.answer_engine == "mock" or plan.intent == "refusal":
             started = time.perf_counter()
             answer = self.answerer.answer(plan, trace)
-            trace.step("answer_mock", {"answer_type": answer.answer_type}, started=started)
+            reason = (
+                "请求越界，不必调模型"
+                if plan.intent == "refusal"
+                else "手动切到降级模式"
+                if self._engine_override == "mock"
+                else "未配置 Key"
+            )
+            trace.step(
+                "answer_mock",
+                {"answer_type": answer.answer_type, "engine": "mock", "reason": reason},
+                started=started,
+            )
             return answer
         client = LLMClient(
             self.settings.llm_base_url,

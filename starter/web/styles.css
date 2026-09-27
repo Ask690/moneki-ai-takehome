@@ -189,6 +189,15 @@ select, input[type="date"], input[type="text"], input[type="number"] { min-width
 .btn-ghost { background: var(--surface-2); color: var(--ink-2); border-color: var(--border); }
 .btn-ghost:hover { color: var(--ink); }
 
+/* 顶栏里那个切换问答引擎的按钮：和它旁边的徽标一样高，不抢视线。 */
+.btn-mode {
+  font-size: 12px;
+  min-height: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.btn-mode:disabled { opacity: 0.5; cursor: progress; }
+
 .range-note { margin: -4px 0 12px; }
 
 .alert {
