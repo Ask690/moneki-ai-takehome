@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .answerer import Answerer
 from .schemas import Answer
@@ -15,6 +15,11 @@ from .toolspec import TOOLS
 
 MAX_TOOL_ROUNDS = 4
 MAX_BAD_ARGS = 2
+#: 工具轮次用完之后追问的一句：不再给工具，逼它用手上的结果作答。
+_FORCE_ANSWER = (
+    "工具调用的轮次已经用完，现在请立刻基于上面已经拿到的工具结果直接作答。"
+    "已有的写已有，缺的那部分就明说没有查到，不要再请求调用任何工具。"
+)
 _DOC_MARK = re.compile(r"[\[【]\s*(KB-\d+)\s*[\]】]")
 _NUMBER = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -49,6 +54,8 @@ class LiveEngine:
         self.today = today
         self.data_period = data_period
         self.budget = budget
+        #: 表结构说明只读一次，整个进程共用。`None` 表示还没读过。
+        self._schema: Optional[str] = None
 
     # -- 主流程 -----------------------------------------------------------------
 
@@ -59,7 +66,7 @@ class LiveEngine:
         retrieved: dict[str, list] = {}
         bad_args = 0
 
-        for round_index in range(MAX_TOOL_ROUNDS + 1):
+        for round_index in range(MAX_TOOL_ROUNDS):
             remaining = deadline - time.perf_counter()
             if remaining < 10:
                 raise LLMError("budget", "整体耗时接近 /api/chat 的时限，已停止调用模型")
@@ -119,14 +126,57 @@ class LiveEngine:
                         "bad_tool_args",
                         "模型连续 %d 轮给出无法解析的工具参数" % bad_args,
                     )
-        raise LLMError("tool_loop", "工具调用超过 %d 轮仍未给出回答" % MAX_TOOL_ROUNDS)
+        # 工具轮次用完还没收敛（模型一直在查、不肯下结论）。
+        # 这里**不再抛错**，而是把工具摘掉再问一次，让它用手上已有的结果作答：
+        # 抛错等于把已经查到的正确数字一起扔掉、换一句「模型服务这次没有正常返回」，
+        # 而它手上的证据往往已经够答了。摘掉工具是关键——留着工具它还会接着查。
+        remaining = deadline - time.perf_counter()
+        if remaining < 10:
+            raise LLMError("budget", "整体耗时接近 /api/chat 的时限，已停止调用模型")
+        messages.append({"role": "user", "content": _FORCE_ANSWER})
+        reply = self.client.chat_with_retry(messages, None, budget=remaining, on_call=trace.llm)
+        trace.step("tool_loop_forced_answer", {"rounds": MAX_TOOL_ROUNDS})
+        return self._finalise(plan, reply.content, evidence, retrieved, trace)
 
     # -- 组装 -------------------------------------------------------------------
+
+    def _schema_note(self) -> str:
+        """把真实的表结构写进提示词。
+
+        不写的话模型会自己编表名——实测见过它写 `dim_product`、`kb_chunks`，
+        拿到 `no such table` 之后再改一轮，白费一次往返，问句复杂一点还会就此跑偏。
+        表结构本来就属于工具说明书的一部分。这里是**从库里现读**的，没有写死：
+        评审换一套数据、表结构变了，说明也跟着变。
+        """
+        if self._schema is not None:
+            return self._schema
+        self._schema = ""
+        result = self.run_tool(
+            "run_sql",
+            {
+                "sql": "SELECT m.name AS tbl, p.name AS col FROM sqlite_master m "
+                "JOIN pragma_table_info(m.name) p WHERE m.type = 'table' "
+                "ORDER BY m.name, p.cid"
+            },
+        )
+        columns: dict[str, list[str]] = {}
+        for row in (result.get("rows") or []):
+            columns.setdefault(row["tbl"], []).append(row["col"])
+        if columns:
+            lines = ["可用的表（SQLite，只能写 SELECT / WITH）："]
+            lines += [
+                "- %s(%s)" % (name, ", ".join(cols)) for name, cols in columns.items()
+            ]
+            self._schema = "\n".join(lines)
+        return self._schema
 
     def _initial_messages(self, plan: Plan, history: list[dict]) -> list[dict]:
         system = SYSTEM_PROMPT.format(
             today=self.today, start=self.data_period["start"], end=self.data_period["end"]
         )
+        schema = self._schema_note()
+        if schema:
+            system += "\n\n" + schema
         messages = [{"role": "system", "content": system}]
         for turn in history[-3:]:
             messages.append({"role": "user", "content": turn.get("question", "")})
