@@ -73,11 +73,22 @@ class DataTools:
         return int(self.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0])
 
     def run_sql(self, sql: str) -> dict:
-        """执行一条 SQL。工具覆盖不到的查法，让模型自己写。"""
-        cursor = self.conn.execute(sql)
+        """执行一条只读 SQL。工具覆盖不到的查法，让模型自己写。
+
+        契约 §5：`data_evidence.sql` 只能是一条 `SELECT` / `WITH` 开头、确实查了表（有 `FROM`）
+        的只读查询。连接本身也是 `mode=ro` 打开的，越权的写操作在 SQLite 层就会被拒绝。
+        """
+        text = (sql or "").strip().rstrip(";").strip()
+        head = text.lstrip("( \t\r\n").upper()
+        if not (head.startswith("SELECT") or head.startswith("WITH")):
+            raise ValueError("只允许 SELECT / WITH 查询")
+        if " FROM " not in (" " + text.upper().replace("\n", " ") + " "):
+            raise ValueError("查询必须 FROM 一张表")
+        if ";" in text:
+            raise ValueError("一次只允许一条查询")
+        cursor = self.conn.execute(text)
         rows = [dict(row) for row in cursor.fetchall()] if cursor.description else []
-        self.conn.commit()
-        return {"sql": sql, "rows": rows[:50], "row_count": len(rows)}
+        return {"sql": text, "rows": rows[:50], "row_count": len(rows)}
 
     def stores(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM stores ORDER BY store_id")]
