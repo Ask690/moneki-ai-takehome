@@ -103,21 +103,23 @@ class DataTools:
     # -- 指标 -------------------------------------------------------------------
 
     def query_metrics(self, start: str, end: str, store_id=None, product_id=None) -> dict:
-        """营业额、退款、订单数、客单价、销量。客单价 = 营业额 ÷ 明细行数。"""
+        """营业额、退款、订单数、客单价、销量，口径见 KB-001 §4。"""
         where, params = self._where(start, end, store_id, product_id)
-        # 退款行不是营业，直接排掉，省得把营业额算少了。
         row = self.conn.execute(
             """
             SELECT COALESCE(SUM(amount_cents), 0),
-                   0,
-                   COUNT(*),
-                   COALESCE(SUM(qty), 0)
-            FROM sales_clean WHERE %s AND is_refund = 0
+                   COALESCE(SUM(CASE WHEN is_refund = 1 THEN amount_cents END), 0),
+                   COUNT(DISTINCT CASE WHEN is_refund = 0 THEN order_id END),
+                   COALESCE(SUM(CASE WHEN is_refund = 0 THEN qty ELSE -qty END), 0)
+            FROM sales_clean WHERE %s
             """
             % where,
             params,
         ).fetchone()
         net_cents, refund_cents, orders, qty = int(row[0]), int(row[1]), int(row[2]), int(row[3])
+        # KB-001 §4：净营业额 = 销售行之和 + 退款行之和（退款金额本身为负，效果是相减）。
+        # 退款金额取其绝对值；有效订单数只数销售行的不同 order_id，退款行不单独计单。
+        # 客单价的分母是有效订单数，不是明细行数（v2 的算法已被取代）。
         aov = round2(Decimal(net_cents) / 100 / orders) if orders else None
         return {
             "start": start,
