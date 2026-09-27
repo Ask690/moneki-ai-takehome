@@ -126,8 +126,17 @@ class Service:
             if name == "search_kb":
                 return self.retrieve(cleaned["query"], cleaned.get("top_k", 5))
             return getattr(self.tools, name)(**cleaned)
-        except (TypeError, ValueError) as exc:
-            return {"error": "工具 %s 执行失败：%s" % (name, exc)}
+        except Exception as exc:  # noqa: BLE001 - 见下
+            # 工具的异常必须在这里变成结构化的错误**还给模型**，不能往外抛。
+            #
+            # 契约 §3 要求 /api/chat 任何情况下都返回 200，所以异常不能穿透工具层；
+            # 更关键的是模型**有能力自己改对**：它写 `SELECT ... FROM dim_product`
+            # 是因为不知道真实的表叫什么，把 `no such table: dim_product` 原样告诉它，
+            # 它下一轮就换成 `products` 了。之前这里只接 (TypeError, ValueError)，
+            # SQL 执行本身的 sqlite3.OperationalError 会一路穿透到 service._answer
+            # 的裸 except 里，整轮对话缩成一句「抱歉，我暂时无法回答。」——
+            # 模型连自己错在哪都不知道，用户也拿不到本该拿到的数字。
+            return {"error": "工具 %s 执行失败：%s：%s" % (name, type(exc).__name__, exc)}
 
     # -- 问答 -------------------------------------------------------------------
 
@@ -171,10 +180,17 @@ class Service:
                 },
             )
             return answer
-        except Exception:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+        except Exception as exc:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+            # 兜底可以吞掉异常，但不能吞掉**原因**：契约 §6 要求 trace 里
+            # 看得到出现的错误，契约 §5 也要求把真实原因留在日志和 trace 里。
+            # 之前这里什么都不记，于是线上只能看到一句「抱歉，我暂时无法回答。」，
+            # 排查时既不知道是哪个工具、也不知道是报错还是超时。
+            trace.error("unhandled", exc)
+            trace.step("unhandled", {"type": type(exc).__name__, "message": str(exc)})
             return Answer(
                 answer="抱歉，我暂时无法回答。",
                 answer_type="refusal",
+                notes=["未预期的错误：%s: %s" % (type(exc).__name__, exc)],
             )
 
     def _run_engine(self, plan, trace: Trace, history: list[dict]) -> Answer:
