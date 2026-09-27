@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from .entities import focus_kinds
+from .loader import doc_status
 from .tokenizer import STOP_CHARS, content_tokens, tokenize
 from .units import MAX_QUOTE, Unit, UnitIndex
 
@@ -274,7 +275,7 @@ class DocFacts:
         return sentence.strip()
 
     def version_note(self, meta: dict) -> str:
-        status = meta.get("status") or ""
+        status = doc_status(meta)
         parts = []
         if meta.get("effective_from"):
             parts.append("%s 起生效" % meta["effective_from"])
