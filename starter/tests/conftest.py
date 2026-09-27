@@ -47,5 +47,12 @@ def client(tmp_path_factory):
             coverage=1.0,
         )
 
+    # 这一句是给类打补丁，不是给实例：装上之后**整个进程**里的检索都变成假的。
+    # 所以必须在会话结束时还原，否则同一个 pytest 进程里跑在后面的测试
+    # （test_regressions.py 全部走真实检索）会拿到这个固定返回。
+    original = retriever_module.Retriever.search
     retriever_module.Retriever.search = fake_search
-    return TestClient(server.app)
+    try:
+        yield TestClient(server.app)
+    finally:
+        retriever_module.Retriever.search = original
