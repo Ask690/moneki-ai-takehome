@@ -731,3 +731,57 @@ def test_live_mode_search_keeps_the_version_context(
         assert doc_id in doc_ids, "检索里少了 %s：%s" % (doc_id, doc_ids)
     for doc_id in forbid_docs:
         assert doc_id not in doc_ids, "检索里不该出现 %s：%s" % (doc_id, doc_ids)
+
+
+# -- 达标比较：两侧的作用域必须一致 -------------------------------------------------
+#
+# 这一组是演示走查时手打问题撞出来的：商品名里敲了个空格，回答照样理直气壮，
+# 但拿全店数字去比单品目标。两种模式都能复现，不是模型方差。
+
+
+def test_a_space_inside_a_product_name_does_not_break_resolution(service):
+    """商品名中间多打一个空格，商品不该解析不出来。
+
+    中文输入法在汉字和英文之间自动补空格是常态，“牛肉 poke”这种写法很常见。
+    修之前 `find_product` 拿 `product_name` 去问句里做**整串子串匹配**
+    （`kbqa/entities.py`），插进一个空格就匹配不上；退路 `strict_mentions`
+    的汉字分支同样要求整串出现，也兜不住。
+
+    后果不是“少了个筛选条件”那么轻：门店和商品都还写在句子里，用户看不出来
+    自己问的东西被换成了全店。同一个问题不敲空格答 125 件（P06），
+    敲了空格答 165 件（S02 全店）。
+    """
+    plan = service.planner.plan("618 当天 S02 牛肉 poke 的销量达到了目标吗？", [])
+    assert plan.store_id == "S02"
+    assert plan.product_id == "P06", "商品名中间多一个空格，商品不该解析不出来"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "618 当天 S02 的牛肉波奇达到目标了吗？",  # 商品名对不上任何商品
+        "618 当天 S02 的主打商品达到目标了吗？",  # 压根没点名商品
+    ],
+)
+def test_a_target_is_never_compared_across_scopes(ask, question):
+    """问题落在门店一级、目标却是单品一级的时候，不能给“达标/未达标”的结论。
+
+    KB-023 里那句是“当天牛肉poke 目标销量 120 份”——**单品目标**。
+    修之前 `_find_target` 的作用域校验写成 `if plan.product_id:`（`kbqa/hybrid.py`），
+    只有解析出商品时才校验；商品没解析出来时这道校验**完全不执行**，
+    单品目标就接到了门店级数字上：
+
+        “S02 全店 165 件 vs 牛肉poke 目标 120 份，已达标，超出 45 份”
+
+    这个结论是错的，而且是自信的错——比拒答糟得多。方向也反了：
+    不知道问的是哪个单品，恰恰是最需要校验的时候。
+
+    注意上面那条用例修好之后，“牛肉 poke”这种写法会走对路（解析出 P06、
+    125 比 120），所以这里只留着**修了也解析不出来**的问法：
+    护栏必须独立于别名解析成立，不能靠“解析总能成功”兜底。
+    """
+    body = ask(question)
+    assert "已达标" not in body["answer"], body["answer"][:200]
+    assert "未达标" not in body["answer"], body["answer"][:200]
+    assert "无法判断是否达标" in body["answer"], body["answer"][:200]
+    assert body["answer_type"] == "data", body["answer_type"]
