@@ -12,7 +12,21 @@ from .retriever import Hit, SearchResult
 from .schemas import Answer
 from .tokenizer import normalise
 
-_TARGET = re.compile(r"目标[^。；\n]{0,12}?(\d[\d,]*(?:\.\d+)?)\s*(份|杯|单|件|元|%)")
+#: “目标…<数字><单位>”。中间排除“每”：那是比率，不是目标量。
+#: 不排除的话，“连带率目标是每 2 单里至少有 1 杯饮料”会被读成“目标 2 单”。
+_TARGET = re.compile(r"目标[^。；\n每]{0,12}?(\d[\d,]*(?:\.\d+)?)\s*(份|杯|单|件|元|%)")
+
+#: 目标单位 -> 拿哪个指标去比。两侧必须指同一件事：
+#: “单”是订单数，不是金额——拿净营业额去比“目标 N 单”，
+#: 会算出“实际 4683 单，超出 4681 单”这种没有意义的结论。
+_UNIT_METRIC = {
+    "份": "qty",
+    "杯": "qty",
+    "件": "qty",
+    "": "qty",
+    "单": "orders",
+    "元": "net_revenue",
+}
 _PRICE = re.compile(r"(?:调整为|调为|现价|活动价|售价为|售价|价格为)\s*[¥￥]?\s*(\d+(?:\.\d+)?)")
 #: 解释异常时优先挑带因果说明的句子，而不是标题或整改措施。分两级。
 _CAUSE_EXPLICIT = re.compile(r"(原因|因为|由于|导致|受.{0,4}影响)")
@@ -40,8 +54,9 @@ class HybridAnswers:
         result = self._search(plan, window=window, trace=trace)
         target, unit, citation, meta = self._find_target(plan, result)
         scope = self._scope(plan, window)
-        actual = metrics["qty"] if unit in ("份", "杯", "件", "") else metrics["net_revenue"]
-        head = render.describe_metrics(metrics, scope, "qty" if unit in ("份", "杯", "件", "") else "net_revenue")
+        metric = _UNIT_METRIC.get(unit, "net_revenue")
+        actual = metrics[metric]
+        head = render.describe_metrics(metrics, scope, metric)
         if target is None:
             return Answer(
                 answer=head + "知识库里没有找到对应的目标值，无法判断是否达标。",
