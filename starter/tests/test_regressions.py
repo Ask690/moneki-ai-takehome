@@ -127,3 +127,14 @@ def test_aov_denominator_is_valid_orders_not_rows(service):
     result = service.tools.query_metrics(period["start"], period["end"])
     assert result["orders"] == orders
     assert result["aov"] == pytest.approx(result["net_revenue"] / orders, rel=1e-4)
+def test_the_answer_comes_from_the_best_ranked_sentence(ask):
+    """候选句要按分数从高到低取。
+
+    修之前排序键是 `(round(score, 2), effective_from)` 这样一个**升序**的元组，
+    分数最低的那句排在最前，而取答案是从第一个开始取的——于是长期在挑
+    「最不像答案的那一句」。这题的三篇候选文档分数都不低，只有排序对了，
+    答案才会落到真正写着过敏原的那一行上。
+    """
+    body = ask("有顾客问牛肉poke 里有哪些过敏原，怎么答？")
+    assert "KB-040" in {c["doc_id"] for c in body["citations"]}
+    assert "麸质" in body["answer"]
