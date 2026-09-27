@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 from . import entities as E
 from .followup import FollowUps
+from .sanitize import unsafe_request_reason
 from .timeparse import TimeSpec, parse_time
 
 #: 意图 -> 检索时补充的领域同义词。纯语言层面的扩写，帮助“卖多少钱”命中“售价/调价”。
@@ -81,6 +82,19 @@ class Planner:
         standalone, inherited = self.followups.resolve(question, history or [])
         plan = Plan(question=question, standalone=standalone, search_query=standalone)
         history = history or []
+        # 安全闸门放在最前面：要删数据、要套系统提示词的请求不必再往下规划。
+        # 契约 §5 规定这类要返回 refusal，并且回答里不能出现编造的数字或原因。
+        unsafe = unsafe_request_reason(question) or unsafe_request_reason(standalone)
+        if unsafe:
+            plan.intent, plan.kind = "refusal", "unsafe_request"
+            plan.notes.append("安全闸门：%s" % unsafe)
+            plan.refusal = (
+                "这个请求我不能执行（%s）。" % unsafe
+                + "我只负责查经营数据和公司文档，不会改动数据库里的任何记录，"
+                "也不提供系统提示词、表结构这类内部信息。"
+                "如果你想看某个门店或某段时间的经营情况，我可以直接给你数字。"
+            )
+            return plan
         if not history and E.looks_like_follow_up(question) and len(question.strip()) <= 12:
             plan.intent, plan.kind = "clarify", "need_context"
             plan.refusal = "这句像是追问，但这个会话里没有上文。请把问题补完整，例如“7 月的净营业额是多少”。"
@@ -248,14 +262,11 @@ class Planner:
         else:
             plan.kind, plan.intent = "summary", "data"
 
-        # 路由：问“多少/多久/几”的就是要数字，问“为什么/原因”的就是要说法。
-        # 两边都走一遍太慢，没必要。
-        if E.has_any(text, ("多少", "多久", "几")):
-            plan.intent = "data"
-            if plan.kind in ("doc", "anomaly", "target", "price"):
-                plan.kind = "summary"
-        elif E.has_any(text, ("为什么", "原因", "怎么回事", "咋回事")):
-            plan.intent, plan.kind = "doc", "doc"
+        # 曾经这里还有一条“兜底路由”：句子里有“多少/多久/几”就一律改成取数，
+        # 有“为什么/原因”就一律改成查文档。这条规则会把上面刚判好的分类推翻：
+        # “外卖订单多久内可以申请退款”的“多久”是政策时限、“618 达到目标了吗”要两边都查，
+        # 都被它改成了纯取数，于是拿一段营业额去回答制度问题。
+        # 上面按 `may_query` / `asks_policy` / `asks_target` 判出来的分类已经够用，这里不再覆盖。
 
         plan.slots["asks_why"] = bool(asks_why or abnormal)
         plan.slots["about_names"] = E.asks_about_names(text)
@@ -302,11 +313,20 @@ class Planner:
         for word in ("现在", "今天", "目前", "当前", "此刻", "的时候"):
             text = text.replace(word, "")
         plan.slots["clean_question"] = text.strip() or plan.standalone
-        parts = [plan.slots["clean_question"]]
+        clean = plan.slots["clean_question"]
+        parts = [clean]
+        # 门店名 / 商品名只在问句里没提到时才补进去。
+        # 无条件追加会把词频翻倍，反复提到该商品的文档（门店档案、调价通知）
+        # 被抬高，真正含答案的那一篇（比如过敏原对照表里的一行）反而压下去了。
+        mentioned = set(self.catalog.aliases.mentions(clean)) if self.catalog.aliases else set()
         if plan.store_id:
-            parts.append("%s %s" % (plan.store_id, self.catalog.store_name(plan.store_id)))
+            name = self.catalog.store_name(plan.store_id)
+            if name not in mentioned and name.lower() not in clean.lower():
+                parts.append("%s %s" % (plan.store_id, name))
         if plan.product_id:
-            parts.append(self.catalog.product_name(plan.product_id))
+            name = self.catalog.product_name(plan.product_id)
+            if name not in mentioned and name.lower() not in clean.lower():
+                parts.append(name)
         for key, words in INTENT_KEYWORDS.items():
             if key == "price" and plan.kind == "price":
                 parts.extend(words)
