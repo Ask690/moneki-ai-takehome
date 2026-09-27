@@ -4,10 +4,14 @@ var/
 __pycache__/
 *.pyc
 
-# 评测与预检产物
+# 评测与预检产物（预检报告的结论抄进了 LLM_SETUP.md 第 7 节，文件本身不入库）
 run_*/
 baseline_run/
 preflight_out.txt
+preflight_report.md
+preflight_report.json
+preflight-report.md
+preflight-report.json
 
 # 服务日志
 *.log

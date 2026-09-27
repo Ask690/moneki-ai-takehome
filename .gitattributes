@@ -1,0 +1,7 @@
+# 全仓库统一用 LF。
+#
+# 不加这两行的话，Windows 上 core.autocrlf=true 会让「工作区是 LF、git 期待 CRLF」
+# 的文件一直显示成已修改（内容其实一个字节都没变），
+# 而且同一份代码在 Windows 和 Linux 上签出成不同的换行符，
+# 评测方在 Linux 上跑出来的 diff 会和提交历史对不上。
+* text=auto eol=lf
