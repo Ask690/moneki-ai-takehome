@@ -106,7 +106,7 @@ class LiveEngine:
                     )
                     continue
                 started = time.perf_counter()
-                result = self.run_tool(name, params)
+                result = self.run_tool(name, self._tool_params(plan, name, params))
                 # 契约 §6：调试面板要能看到“执行了什么、返回了什么”。
                 # 结果也留在这一步里；下一轮的提示词里虽然有同样一份，但那是给模型看的。
                 trace.step(
@@ -145,6 +145,32 @@ class LiveEngine:
         return self._finalise(plan, reply.content, evidence, retrieved, trace)
 
     # -- 组装 -------------------------------------------------------------------
+
+    def _tool_params(self, plan: Plan, name: str, params: dict) -> dict:
+        """给模型要调的 `search_kb` 补上规划器算出来的**版本上下文**。
+
+        模型只会给 `query` / `top_k`，它不可能知道：
+
+        * 「618 当天」问的是 2026 年，2025 年那份**归档**方案（KB-024，活动价 ¥25）
+          不该出现在检索结果里；
+        * 「那 6 月的时候呢」要按 2026-06-30 这个时点取**当时生效**的 KB-010，
+          而不是现行的那一版。
+
+        这些是 `Planner` 已经算好的（`plan.year` / `plan.as_of` / `plan.slots["historical"]`），
+        而 `search_kb` 之前只把 query 原样递给检索器，上下文全丢。后果是两头都出问题：
+        现行题里把 KB-024 端上来、模型顺口就讲去年的价（公开题 V01、H02 都栽在这上面），
+        追问旧版时又检索不到 KB-010，模型只能如实说"旧版我检索不到"（V03 丢 2 分）。
+
+        用 `setdefault` 而不是赋值：这三个键不在工具的 JSON schema 里，
+        模型本来就填不了；万一哪天真填了，以它的为准。
+        """
+        if name != "search_kb":
+            return params
+        merged = dict(params)
+        merged.setdefault("year", plan.year)
+        merged.setdefault("as_of", plan.as_of)
+        merged.setdefault("historical", bool(plan.slots.get("historical")))
+        return merged
 
     def _schema_note(self) -> str:
         """把真实的表结构写进提示词。

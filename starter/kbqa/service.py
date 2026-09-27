@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import date
 from typing import Any, Optional
 
 from .answerer import Answerer
@@ -24,6 +25,11 @@ from .trace import Trace, TraceStore
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INT_PARAMS = {"top_k", "limit"}
+#: 这三个不是给模型填的参数，而是规划器算出来的**版本上下文**（见 `retrieve`）。
+#: 它们不在工具的 JSON schema 里——模型不该自己决定"哪一版现行"——
+#: 但 `search_kb` 需要它们，所以在参数清洗时放行，取值原样保留（`as_of` 是 date 对象，
+#: 转成字符串反而和 `Retriever.search` 的比较对不上）。
+_CONTEXT_KEYS = ("year", "as_of", "historical")
 
 
 class Service:
@@ -85,13 +91,28 @@ class Service:
     def metrics_daily(self, start: str, end: str, store_id=None, product_id=None) -> dict:
         return self.tools.daily_metrics(start, end, store_id, product_id)
 
-    def retrieve(self, query: str, top_k: int = 5) -> dict:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        year: Optional[int] = None,
+        as_of: Optional[date] = None,
+        historical: bool = False,
+    ) -> dict:
         """契约 §4：片段够就恰好给 top_k 条，不够才少给。
 
         `top_k` 大于索引里的片段总数时按总数封顶——这正是契约允许少给的那种情况。
+
+        `year` / `as_of` / `historical` 是**版本上下文**，不是检索参数：
+        契约 §4 要求"过滤元数据要在取 top_k 之前做"，而"哪一版现行"正是元数据过滤。
+        `/api/retrieve` 端点不传它们（默认值 = 旧行为）；live 模式下由 `search_kb`
+        把规划器算好的上下文带进来，见 `live.LiveEngine._tool_params`。
         """
         wanted = max(1, min(int(top_k or 5), len(self.index.chunks) or 1))
-        result = self.retriever.search(query or "", top_k=wanted)
+        result = self.retriever.search(
+            query or "", top_k=wanted, year=year, as_of=as_of, historical=historical
+        )
         return {"results": [hit.as_result() for hit in result.hits]}
 
     # -- 工具执行（live 模式下由模型驱动） ---------------------------------------
@@ -104,6 +125,10 @@ class Service:
         )
         cleaned: dict[str, Any] = {}
         for key, value in (params or {}).items():
+            if key in _CONTEXT_KEYS:
+                if value is not None:
+                    cleaned[key] = value
+                continue
             if key not in schema["properties"]:
                 continue
             if key in _INT_PARAMS:
@@ -124,7 +149,13 @@ class Service:
                 return {"error": "缺少必填参数 %s" % key}
         try:
             if name == "search_kb":
-                return self.retrieve(cleaned["query"], cleaned.get("top_k", 5))
+                return self.retrieve(
+                    cleaned["query"],
+                    cleaned.get("top_k", 5),
+                    year=cleaned.get("year"),
+                    as_of=cleaned.get("as_of"),
+                    historical=bool(cleaned.get("historical")),
+                )
             return getattr(self.tools, name)(**cleaned)
         except Exception as exc:  # noqa: BLE001 - 见下
             # 工具的异常必须在这里变成结构化的错误**还给模型**，不能往外抛。
