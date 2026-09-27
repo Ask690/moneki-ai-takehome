@@ -31,41 +31,48 @@
 ```
 $ python scripts/verify_red.py
 先确认全部用例在**修好之后**是绿的：
-  24 条全部通过，可以开始逐条打回缺陷。
+  27 条全部通过，可以开始逐条打回缺陷。
 
-类别        打回去的缺陷                                    用例                                              结果
-清洗口径     六条剔除规则整段略过，原始行原样进库                    test_cleaning_removes_exactly_what_kb001_says     红
-清洗口径     退款行从净营业额里被排除                            test_net_revenue_includes_refund_rows             红
-清洗口径     客单价的分母用行数而不是有效订单数                     test_aov_denominator_is_valid_orders_not_rows     红
-日期区间     区间写成了开区间                                  test_date_range_is_inclusive_on_both_ends         红
-元数据键名    状态的键写成 state，读的人找的是 status              test_docs_meta_exposes_status_under_the_key...    红
-元数据键名    键名错位 + 读的一端绕过 doc_status，取代关系静默失效      test_superseded_version_is_excluded_for_the...    红
-缓存键      缓存键只算版本号，不算知识库内容                        test_cache_key_changes_when_a_kb_file_changes     红
-分词       英文被拆成一个个字母                                test_english_words_stay_whole_tokens              红
-过滤顺序     先取 top_k 再过滤，被挡掉的版本先占掉格子                test_top_k_is_filled_after_filtering_not_before   红
-命中归属     doc_id 按「第几条命中」另取一篇文档                    test_every_hit_reports_its_own_chunk              红
-只读 SQL    run_sql 不校验语句形状，非 SELECT / 无 FROM 的查询照过   test_run_sql_only_returns_selects_with_a_from     红
-安全闸门     「把」字句的改数据请求漏过闸门                          test_unsafe_or_manipulative_requests_are_refused  红
-文档注入     文档里埋的指令句不再跳过，进了候选句                       test_instruction_sentences_never_become_...       红
-工具异常     工具抛出的异常只接 (TypeError, ValueError)，SQL 报错穿透   test_tool_errors_come_back_as_structured_errors   红
-工具轮次     工具轮次用完就抛错，而不是用手上的结果作答                    test_tool_loop_exhaustion_still_produces_an_...   红
-证据裁剪     证据整包塞进 data_evidence，数字总数撞上 60 的上限        test_data_evidence_stays_within_the_number_...   红
-作答长度     回答前面拼接首篇命中的整篇文档                           test_answers_stay_within_the_contract_limits      红
-候选句排序    排序键是升序的，最差的一句排在最前                         test_the_answer_comes_from_the_best_ranked_...   红
-焦点闸门     满足焦点的句子降级成「打个折」，不再是否放行的闸门               test_the_answer_is_the_sentence_that_carries_...  红
-会话隔离     所有 session_id 共用一段上文                         test_sessions_do_not_bleed_into_each_other       红
-追问上下文    history 没传进规划器，追问永远判成缺少上下文                test_follow_up_within_one_session_keeps_the_...  红
-价格意图      PRICE_WORDS 不认「成交价/均价」，整句落到纯文档分支            test_average_price_questions_go_to_the_database   红
-隐私闸门      没有隐私闸门，索要某个人的私人联系方式照答                       test_requests_for_a_person_s_private_contact...   红
-版本上下文     live 模式下 search_kb 只把 query 递给检索器，版本上下文全丢    test_live_mode_search_keeps_the_version_context   红
+类别         打回去的缺陷                                       用例                                                       结果
+----------------------------------------------------------------------------------------------------------------------------------
+清洗口径       六条剔除规则整段略过，原始行原样进库                           test_cleaning_removes_exactly_what_kb001_says            红 
+清洗口径       退款行从净营业额里被排除                                 test_net_revenue_includes_refund_rows                    红 
+清洗口径       客单价的分母用行数而不是有效订单数                            test_aov_denominator_is_valid_orders_not_rows            红 
+日期区间       区间写成了开区间                                     test_date_range_is_inclusive_on_both_ends                红 
+元数据键名      状态的键写成 state，读的人找的是 status                   test_docs_meta_exposes_status_under_the_key_readers_use  红 
+元数据键名      键名错位 + 读的一端绕过 doc_status，取代关系静默失效            test_superseded_version_is_excluded_for_the_current_rule 红 
+缓存键        缓存键只算版本号，不算知识库内容                             test_cache_key_changes_when_a_kb_file_changes            红 
+分词         英文被拆成一个个字母                                   test_english_words_stay_whole_tokens                     红 
+过滤顺序       先取 top_k 再过滤，被挡掉的版本先占掉格子                     test_top_k_is_filled_after_filtering_not_before          红 
+命中归属       doc_id 按「第几条命中」另取一篇文档                        test_every_hit_reports_its_own_chunk                     红 
+只读 SQL     run_sql 不校验语句形状，非 SELECT / 无 FROM 的查询照过      test_run_sql_only_returns_selects_with_a_from            红 
+安全闸门       「把」字句的改数据请求漏过闸门                              test_unsafe_or_manipulative_requests_are_refused         红 
+文档注入       文档里埋的指令句不再跳过，进了候选句                           test_instruction_sentences_never_become_candidates       红 
+工具异常       工具抛出的异常只接 (TypeError, ValueError)，SQL 报错穿透工具层 test_tool_errors_come_back_as_structured_errors          红 
+工具轮次       工具轮次用完就抛错，而不是用手上的结果作答                        test_tool_loop_exhaustion_still_produces_an_answer       红 
+证据裁剪       证据整包塞进 data_evidence，数字总数撞上 60 的上限           test_data_evidence_stays_within_the_number_budget        红 
+作答长度       回答前面拼接首篇命中的整篇文档                              test_answers_stay_within_the_contract_limits             红 
+候选句排序      排序键是升序的，最差的一句排在最前                            test_the_answer_comes_from_the_best_ranked_sentence      红 
+焦点闸门       满足焦点的句子降级成「打个折」，不再是否放行的闸门                    test_the_answer_is_the_sentence_that_carries_the_value   红 
+会话隔离       所有 session_id 共用一段上文                         test_sessions_do_not_bleed_into_each_other               红 
+追问上下文      history 没传进规划器，追问永远判成缺少上下文                   test_follow_up_within_one_session_keeps_the_context      红 
+价格意图       PRICE_WORDS 不认「成交价/均价」，整句落到纯文档分支             test_average_price_questions_go_to_the_database          红 
+隐私闸门       没有隐私闸门，索要某个人的私人联系方式照答                        test_requests_for_a_person_s_private_contact_are_refused 红 
+版本上下文      live 模式下 search_kb 只把 query 递给检索器，版本上下文全丢    test_live_mode_search_keeps_the_version_context          红 
+实体解析       商品名匹配不挤空白，问句里多一个空格就解析不出商品                    test_a_space_inside_a_product_name_does_not_break_resolution 红 
+达标口径       作用域校验只在解析出商品时才做，解析不出来就完全不校验                  test_a_target_is_never_compared_across_scopes            红 
+达标口径       目标正则不排除“每”，连带率被读成目标量                         test_a_rate_is_never_read_as_a_quantity_target           红 
 
 每条缺陷打回去之后，对应用例都变红了 —— 取证成立。
 ```
 
 前 21 条来自第二关的交接包；第 22、23 条是自己加的额外题库
 （[`eval/extra_questions.jsonl`](eval/extra_questions.jsonl)，公开题库之外的一组题）跑出来的；
-第 24 条是 **live 模式跑分反复掉在同一个语义上**追出来的。
+第 24 条是 **live 模式跑分反复掉在同一个语义上**追出来的；
+第 25～27 条是**演示走查时手打问题打错一个字**撞出来的（商品名中间多敲了个空格），
+三条是同一个根上的三层。
 加这一组题、以及坚持用 live 模式跑分，目的就是这个：公开题库拿满分不代表没有别的洞。
+第 25～27 条还说明了另一件事：**交付前自己动手点一遍**，和跑评测是两种不同的检验。
 
 脚本只给开发用，评测方不需要它。它有个不显眼但要紧的细节：**每次跑用例之前先删掉
 `starter/.cache/index.json`**——理由是第 7 条踩出来的。
@@ -384,6 +391,60 @@ $ python scripts/verify_red.py
 
 ---
 
+## 25. 商品名中间多一个空格，整句悄悄退回门店级
+
+| | |
+|---|---|
+| **现象** | 演示走查时手打问题：「618 当天 S02 牛肉 poke 的销量达到了目标吗？」回答「2026-06-18（S02 Makai Poke）：销量 **165 件**……目标为 **120 份**（KB-023），实际 165 份，**已达标，超出 45 份**」。同一个问题只要把空格去掉就答「125 件，超出 5 份」。165 是 S02 全店的销量，120 是**单品「牛肉poke」**的目标——两侧不是一个作用域。 |
+| **假设** | 先怀疑是模型方差（live 模式本来就抖）。但降级模式**同样的输入给同样的输出**，也答 165；说明不是模型。再看 `data_evidence` 里的 `query_metrics` 参数：`product_id` 是 `null`——商品根本没解析出来。于是问题变成「为什么少一个空格就解析不出来」。 |
+| **验证** | 拿四种写法跑同一句：`牛肉poke` → P06；`牛肉 poke` → None；`门店 牛肉poke` → P06；`牛肉 poke`（另一种问法）→ None。**唯一变量就是商品名里的那个空格**，与「门店」这个词无关。再去读 `find_product`：它拿 `product_name` 去问句里做整串子串匹配（`normalise(product["product_name"]) in lowered`），库里是「牛肉poke」，问句里是「牛肉 poke」，匹配不上；退路 `strict_mentions` 的汉字分支同样要求整串出现（`alias in lowered`），也兜不住。 |
+| **根因** | `starter/kbqa/entities.py:198`（当时是 `find_product` 里的那段列表推导）：商品名匹配没有容忍空白。中文输入法在汉字和英文之间自动补空格是常态，而库里的商品名是连着的——一个空格就让商品解析成 `None`。**后果不是"少了个筛选条件"那么轻**：门店和商品都还写在问句里，用户看不出自己问的东西被换成了全店。 |
+| **修复** | `63d302b` —— 新增 `entities._squeezed()`（挤掉全部空白），商品名与问句两侧都挤掉再比。只用于实体名比对，不进分词与检索。 |
+| **回归测试** | `test_a_space_inside_a_product_name_does_not_break_resolution`。**红证据**：verify_red 把挤空白改回整串匹配，用例报「商品名中间多一个空格，商品不该解析不出来」（`plan.product_id` 是 `None`，应当是 `P06`）。 |
+
+**为什么这条值得单独记。** 它不是"答得不好"，是**答错还说得很确定**：数字是真的、引用是真的、
+结论是"已达标，超出 45 份"。检索漏了、模型说"没查到"，都还能被用户看出来；
+这种被悄悄换掉口径的答案，用户没有理由怀疑。同一类错误在下面两条里又出现了两次。
+
+---
+
+## 26. 达标比较：作用域校验写成了单向的
+
+| | |
+|---|---|
+| **现象** | 顺着第 25 条查下去，发现空格只是**触发方式**之一。问「618 当天 S02 的**牛肉波奇**达到目标了吗？」（商品名对不上库里任何商品）、甚至「618 当天 S02 的**主打商品**达到目标了吗？」（压根没点名商品），都答「已达标，超出 45 份」。这些问法里 `plan.product_id` 都是 `None`。 |
+| **假设** | 单品目标接到了门店级数字上，说明 `_find_target` 里那道"目标句得和商品对得上"的校验没执行。 |
+| **验证** | 直接调 `svc.answerer._find_target(plan, result)`，把 `plan` 换成一个**不点名商品**的门店级计划，返回 `120.0 份`——单品目标照给。回读代码：校验写成 `if plan.product_id:`，**只有解析出商品时才进这个分支**；`product_id` 是 `None` 时整段跳过，等于没有校验。 |
+| **根因** | `starter/kbqa/hybrid.py:96`（当时是 `if plan.product_id:` 那个分支）：作用域校验是单向的。**方向正好反了——不知道问的是哪个单品，恰恰是最需要校验的时候。** 顺带把知识库里所有"目标"句捞出来看了一遍，一共三种口径：单品（KB-023 两处）、全门店合计（KB-024「全部门店合计目标销量 300 份」、KB-028「全门店合计目标销量 900 杯」）、以及没说清的。 |
+| **修复** | `f9f51cb` —— 抽出 `hybrid._target_scope_ok()`，按口径对齐：单品口径要求问题落在这个单品上（句子里提到它，或者整篇文档都在讲它）；**全门店合计口径要求问题没限定门店**——拿 S02 一家的销量去比全门店的目标是同一类错比；口径没说清的判不了，宁可不说。 |
+| **回归测试** | `test_a_target_is_never_compared_across_scopes`（参数化两条：商品名对不上任何商品、压根没点名商品）。**红证据**：verify_red 把校验打回单向版本，两条都红，报的是「`已达标` 不该出现」。 |
+
+---
+
+## 27. 比率被当成了目标量
+
+| | |
+|---|---|
+| **现象** | 第 26 条的护栏落地**之后**冒出来的：上面那两条用例仍然红，但答案变了——从「目标为 120 份」变成「目标为 **2 单**（KB-023），实际 **4683 单**，已达标，超出 4681 单」。4683 是净营业额（**元**），被贴上「单」的单位，去比一个连带率。 |
+| **假设** | 护栏跳掉第 31 行的单品目标之后，命中轮到了同一节里的另一句。 |
+| **验证** | 把 KB-023 第三节整段打出来，再拿 `_TARGET` 逐句试：第 31 行「\*\*当天牛肉poke 目标销量 120 份。」命中 `120 份`（对）；第 32 行「同时希望带动饮料和小食的连带，**连带率目标是每 2 单里至少有 1 杯饮料**。」也命中——`目标[^。；\n]{0,12}?` 把「是每」两个字吃进去，读成了「目标 2 单」（错）。第 38 行备货那句也命中 `120 份`。 |
+| **根因** | `starter/kbqa/hybrid.py:17`：`_TARGET` 的中间段允许任意 12 个字符，「每」没有排除。这是**比率**（每 2 单至少 1 杯），不是目标量。 |
+| **修复** | `6bcb650` —— 把「每」排除出中间那段（`[^。；\n每]{0,12}?`）。逐句复验：第 31、38 行照常命中，第 32 行不再命中。 |
+| **回归测试** | `test_a_rate_is_never_read_as_a_quantity_target`。**红证据**：verify_red 把「每」从排除项里去掉，用例报「比率被当成了目标量」。 |
+
+这条有三点值得记：
+
+1. **它是被上一条修出来的。** 修第 26 条之前，第 31 行总能先命中，比率句永远轮不到出头——
+   这个缺陷一直在，但看不见。这就是交接包说的"修掉一层，才看得见下一层"，只不过这次是**我自己修出来的**下一层。
+2. **用例改过一次定位。** 它最初写成端到端的（问一句、断言不出现"已达标"），写完发现
+   **护栏一落地它自己就绿了**——那样它证明的是护栏，不是正则。所以改成正则层面的用例，
+   并且把句子**写死**而不是去读 KB-023：知识库是会被整套换掉的，用例不能跟着一起变。
+   一个测试如果在它声称的那处修复之前也是绿的，它就没有证明任何事——这条差一点就成了那种。
+3. **反向断言不能省。** 用例里除了「比率不命中」，还有一条「真的数量目标必须命中」。
+   没有它的话，把 `_TARGET` 改成什么都不认也能让用例变绿。
+
+---
+
 ## 三、没有红测试支撑的加固项（如实标注）
 
 下面这些我在交接包的基础上改了，但**拿不出"打回去必须变红"的证据**——它们要么是上游本来就正确的行为被我加固，
@@ -398,6 +459,7 @@ $ python scripts/verify_red.py
 | trace 记下工具返回了什么 | 契约 §6 要求调试面板看得到"执行了什么、返回了什么"。 | `bf96fba` | 演示：见 `DEMO.md`。**没有**红用例。 |
 | 前端（看板 / 问答 / 调试面板） | 第一关的前端交付。 | `357b5b4` | 演示：见 `DEMO.md`。 |
 | 一键启动脚本 | 让评审不必先装 `uv`（本机没有）。 | 见 `README.md` 第一节 | 手工验证。 |
+| 目标单位「单」映射到订单数 | `hybrid.py` 里"单位 → 拿哪个指标去比"原本写成「份/杯/件/空 走销量，其余走净营业额」，于是「单」也走净营业额：拿 4683 **元**去比「目标 2 单」，算出「实际 4683 单，超出 4681 单」。改成「单」走订单数。 | `6bcb650` | **没有**红用例，也**写不出来**：知识库里没有「目标 N 单」这种句子，造不出会红的用例。它是修第 27 条时顺手把映射写对的，不是被用例逼出来的——所以记在这里，不混进上面那 27 条。 |
 
 ## 四、两次"看起来像代码回归、其实是别的原因"
 

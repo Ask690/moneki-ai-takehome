@@ -401,6 +401,55 @@ CASES: list[tuple[str, str, str, list[tuple[str, str, str]]]] = [
             )
         ],
     ),
+    # -- 达标比较：口径与单位（演示走查时手打问题撞出来的三条）------------------------
+    (
+        "实体解析",
+        "商品名匹配不挤空白，问句里多一个空格就解析不出商品",
+        "test_a_space_inside_a_product_name_does_not_break_resolution",
+        [
+            (
+                "starter/kbqa/entities.py",
+                """        squeezed = _squeezed(lowered)
+        matches = [
+            product
+            for product in self.products
+            if _squeezed(normalise(product["product_name"])) in squeezed
+        ]""",
+                """        matches = [
+            product
+            for product in self.products
+            if normalise(product["product_name"]) in lowered
+        ]""",
+            )
+        ],
+    ),
+    (
+        "达标口径",
+        "作用域校验只在解析出商品时才做，解析不出来就完全不校验",
+        "test_a_target_is_never_compared_across_scopes",
+        [
+            (
+                "starter/kbqa/hybrid.py",
+                "                if not self._target_scope_ok(plan, hit, sentence):\n                    continue",
+                """                if plan.product_id:
+                    name = self.catalog.product_name(plan.product_id)
+                    if normalise(name) not in normalise(sentence) and not self._same_topic(hit, plan):
+                        continue""",
+            )
+        ],
+    ),
+    (
+        "达标口径",
+        "目标正则不排除“每”，连带率被读成目标量",
+        "test_a_rate_is_never_read_as_a_quantity_target",
+        [
+            (
+                "starter/kbqa/hybrid.py",
+                '_TARGET = re.compile(r"目标[^。；\\n每]{0,12}?(\\d[\\d,]*(?:\\.\\d+)?)\\s*(份|杯|单|件|元|%)")',
+                '_TARGET = re.compile(r"目标[^。；\\n]{0,12}?(\\d[\\d,]*(?:\\.\\d+)?)\\s*(份|杯|单|件|元|%)")',
+            )
+        ],
+    ),
 ]
 
 
