@@ -74,6 +74,11 @@ bash start.sh
 | 10 | 11:46 | 工作区，`b518ed0` 之后 | live | 是 | 额外 15 题 | **28.00 / 30** | X09 |
 | **11** | **11:51** | **`ae6ddae`（工作区干净）** | **live** | **是** | **公开** | **99.00** | **T02** |
 | **12** | **11:52** | **`ae6ddae`（工作区干净）** | **live** | **是** | **额外 15 题** | **28.00 / 30** | **X09** |
+| **13** | **12:02** | **`b595906`（最终交付，工作区干净）** | **降级** | 否 | 公开 | **100.00** | — |
+| **14** | **12:03** | **`b595906`（最终交付，工作区干净）** | **降级** | 否 | 额外 15 题 | **28.00 / 30** | X09 |
+
+第 13、14 次是在**最终交付的提交**上补跑的降级模式，用来确认后面那几次只改文档的提交
+没有碰坏任何东西——第 7、8 次跑在改动过程中的工作区上，不能代表最终状态。
 
 第 11、12 次是**最终代码**上的运行（第 9 次暴露的"live 模式下 `search_kb` 丢掉版本上下文"这个缺陷，
 在 `08ef9a0` 先加红用例、`ae6ddae` 修掉，见 `DEBUG_LOG.md` 第 24 条）。
@@ -133,12 +138,13 @@ bash start.sh
 
 | 项目 | 值 |
 |---|---|
-| 代码 | 工作区 `a860b5e` 之后（`f2147cf` 的两条红用例已修） |
-| 命令 | `python3 eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/public_questions.jsonl --kb knowledge_base --out run_mock_check` |
+| 代码 | `b595906`（最终交付的提交，工作区干净） |
+| 命令 | `python3 eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/public_questions.jsonl --kb knowledge_base --out run_mock_final` |
 | 模型 | 无（没有配 Key，`llm_mode: "mock"`） |
-| 得分 | **100.00 / 100.00**（55 题全部通过），耗时中位数 0.14s / 最大 0.42s |
+| 得分 | **100.00 / 100.00**（55 题全部通过） |
 
-同一份题库在 `run_all` 也拿过一次 100.00。降级路径不经过模型，所以同样的输入给同样的输出——
+同一份题库在 `run_all`、`run_mock_check` 也各拿过一次 100.00，前后三次一致。
+降级路径不经过模型，所以同样的输入给同样的输出——
 这也正是它作为**评测挂钩**的价值：`starter/tests/test_eval_regression.py` 把它挂进 pytest，
 没有 Key 也能在 CI 里守住这条线（见 §8）。
 
@@ -213,7 +219,7 @@ live 模式里确实也有消不掉的表达抖动：契约 §7.3 说思考模�
 |---|---|
 | 文件 | `eval/extra_questions.jsonl`（15 题 / 30 分），说明见 `eval/extra_questions.README.md` |
 | 命令 | `python3 eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/extra_questions.jsonl --kb knowledge_base --out run_extra_live2` |
-| 降级模式 | **28.00 / 30.00**（第 8 次，`run_extra_mock`） |
+| 降级模式 | **28.00 / 30.00**（第 14 次，最终提交 `b595906` 上重跑，`run_extra_mock_final`） |
 | live 模式 | **28.00 / 30.00**（第 12 次，`run_extra_live2`） |
 
 **期望值不是抄来的，是独立算出来的。** `eval/extra_questions.README.md` 里记了取证过程：
