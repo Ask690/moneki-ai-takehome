@@ -15,6 +15,8 @@ from .toolspec import TOOLS
 
 MAX_TOOL_ROUNDS = 4
 MAX_BAD_ARGS = 2
+#: 契约 §5：全部 result 里的数字总数不超过 60。
+MAX_EVIDENCE_NUMBERS = 60
 #: 工具轮次用完之后追问的一句：不再给工具，逼它用手上的结果作答。
 _FORCE_ANSWER = (
     "工具调用的轮次已经用完，现在请立刻基于上面已经拿到的工具结果直接作答。"
@@ -220,7 +222,7 @@ class LiveEngine:
             answer=text,
             answer_type=answer_type,
             citations=citations,
-            data_evidence=evidence,
+            data_evidence=_prune_evidence(evidence, text),
         )
 
     def _citations(self, plan: Plan, doc_ids: list[str]) -> list[dict]:
@@ -262,6 +264,92 @@ def _trace_result(result: Any, limit: int = 4000) -> Any:
     if len(text) <= limit:
         return result
     return {"truncated": True, "size": len(text), "preview": text[:limit]}
+
+
+def _count_numbers(obj: Any) -> int:
+    return len(_numbers_in(json.dumps(obj, ensure_ascii=False, default=str)))
+
+
+def _support(values: list[float], wanted: list[float]) -> int:
+    """这条证据支撑了回答里多少个**不同**的数字。
+
+    不能数「匹配了多少次」：`daily_metrics` 的每一行都带着日期，而日期会被拆成
+    2026、7、1 这样的数字，31 行下来光是重复的「2026」「7」就能刷出 60 多次命中，
+    把真正承载了回答数字的那条（`query_metrics`）挤到后面去。
+    """
+    return sum(1 for value in set(wanted) if any(_matches(number, [value]) for number in values))
+
+
+def _trim_rows(item: dict, wanted: list[float], budget: int) -> Optional[tuple[dict, int]]:
+    """一条工具结果本身就超预算时，按**行**裁。
+
+    整月的 `daily_metrics` 有 31 行、接近 200 个数字（实测 192），一条就顶穿了 60 的上限——
+    只在「条与条之间」裁是不够的。裁法是优先留下**承载了回答里那些数字的行**：
+    回答引用了哪几天，就留哪几天，其余丢掉。
+    一行都没承载（回答的数字来自别的工具）时返回 None，让调用方把整条丢掉。
+    """
+    result = item.get("result")
+    if not isinstance(result, dict):
+        return None
+    for key in list(result):
+        rows = result.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        # 整条里除这个列表之外的部分都要占预算——**包括 params**：查询区间
+        # 「2026-07-01」本身就会被数成 3 个数字，漏掉它账就对不上了。
+        used = _count_numbers({**item, "result": {k: value for k, value in result.items() if k != key}})
+        scored = []
+        for order, row in enumerate(rows):
+            numbers = _numbers_in(json.dumps(row, ensure_ascii=False, default=str))
+            hit = _support(numbers, wanted)
+            # 没承载回答里任何数字的行直接不看：留着只是占预算，
+            # 回答里根本没有引用它。（回答引用了哪几天，就留哪几天。）
+            if hit:
+                scored.append((hit, order, row, len(numbers)))
+        scored.sort(key=lambda entry: (-entry[0], entry[1]))
+        kept: list[tuple[int, dict]] = []
+        for _, order, row, size in scored:
+            if used + size > budget:
+                continue
+            kept.append((order, row))
+            used += size
+        if not kept:
+            return None
+        return {**item, "result": {**result, key: [row for _, row in sorted(kept)]}}, used
+    return None
+
+
+def _prune_evidence(evidence: list[dict], text: str, limit: int = MAX_EVIDENCE_NUMBERS) -> list[dict]:
+    """把证据裁到「刚好支撑这条回答」为止。
+
+    契约 §5 规定全部 `result` 里的数字总数不超过 60。模型为了保险往往连查好几个工具
+    （`query_metrics` + `unit_price_check` + `top_products`），每个工具的返回都塞进
+    evidence，很容易堆到六十几——多出来的那些回答里根本没引用，却把上限撞了，
+    整题判不合格。所以按「哪几条真的支撑了回答里的数字」排序，再按数字预算封顶；
+    单条自己就超预算的（整月 daily_metrics），继续按行裁。
+    一条都放不下时留最小的那条：回答里的数字总得有个出处。
+    """
+    wanted = _numbers_in(text)
+    scored = []
+    for order, item in enumerate(evidence):
+        values = _numbers_in(json.dumps(item, ensure_ascii=False, default=str))
+        scored.append((_support(values, wanted), order, item, len(values)))
+    keep: list[tuple[int, dict]] = []
+    total = 0
+    for hit, order, item, count in sorted(scored, key=lambda row: (-row[0], row[1])):
+        if total + count <= limit:
+            keep.append((order, item))
+            total += count
+            continue
+        trimmed = _trim_rows(item, wanted, limit - total)
+        if trimmed is not None:
+            keep.append((order, trimmed[0]))
+            total += trimmed[1]
+    if not keep and scored:
+        # 全都放不下：留数字最少的那条，至少让回答里的数字有个出处。
+        _, order, item, _ = min(scored, key=lambda row: row[3])
+        keep = [(order, item)]
+    return [item for _, item in sorted(keep)]
 
 
 def _numbers_in(text: str) -> list[float]:
