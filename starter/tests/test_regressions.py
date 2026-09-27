@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import types
 from pathlib import Path
@@ -248,12 +249,36 @@ def test_run_sql_rejects_writes(service, sql):
 
     走 `run_tool` 而不是直接调 `run_sql`——模型看到的错误必须是一条结构化的
     `{"error": ...}`，而不是一个把整轮对话打断的异常。
+
+    注意这条用例是**护栏，不是某一处缺陷的回归证据**：连接本身以 `mode=ro` 打开，
+    即使把 `run_sql` 的形状校验整段删掉，SQLite 也会把写操作挡在门外，
+    这条用例照样是绿的（详见 `DEBUG_LOG.md` 第 11 条）。
+    真正能证明那处修复的是下面那条 `test_run_sql_only_returns_selects_with_a_from`。
     """
     result = service.run_tool("run_sql", {"sql": sql})
     assert "error" in result, "应当被拒绝：%s" % sql
 
     rows = service.tools.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0]
     assert rows == 18290, "数据库一个字节都不该被改动"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PRAGMA table_info(sales_clean)",
+        "SELECT 1",
+        "VALUES (1)",
+    ],
+)
+def test_run_sql_only_returns_selects_with_a_from(service, sql):
+    """契约 §5：`data_evidence.sql` 只能是一条 `SELECT` / `WITH` 开头、确实查了表的查询。
+
+    只读连接挡得住**写**，挡不住**读**：上面这三条都能在 `mode=ro` 的连接上跑通、
+    并且照样返回行（实测 `PRAGMA table_info` 返回 8 行、`SELECT 1` 返回 1 行）。
+    一旦放过去，它们就会原样出现在 `data_evidence.sql` 里，形状不合契约。
+    """
+    result = service.run_tool("run_sql", {"sql": sql})
+    assert "error" in result, "这样的语句不该被当成证据：%s" % sql
 
 
 def test_run_sql_caps_how_much_it_returns(service):
@@ -348,10 +373,220 @@ def test_sessions_do_not_bleed_into_each_other(service, ask):
 
 
 def test_follow_up_within_one_session_keeps_the_context(service, ask):
-    """同一个 session_id 里，追问要接得上前一轮。"""
+    """同一个 session_id 里，追问要接得上一轮。"""
     ask("S01 六月的净营业额是多少？", session_id="session-C")
     body = ask("那 7 月呢？", session_id="session-C")
     assert body["answer_type"] == "data"
     trace = service.get_trace(body["trace_id"])
     plan = next(step for step in trace["steps"] if step["step"] == "plan")
     assert plan["detail"]["store_id"] == "S01"
+
+
+# -- 工具层：异常与轮次 -------------------------------------------------------------
+
+
+def test_tool_errors_come_back_as_structured_errors(service):
+    """工具内部的异常要变成结构化的错误**还给模型**，不能穿透工具层。
+
+    `sqlite3.OperationalError` 曾经一路穿透到 `service._answer` 的裸 except，
+    整轮对话缩成一句「抱歉，我暂时无法回答。」——模型连自己写错了表名都不知道。
+    实测它会编表名（`dim_product`、`kb_chunks`），而把「没有这张表」原样回给它，
+    它下一轮就能自己改对。
+    """
+    result = service.run_tool("run_sql", {"sql": "SELECT * FROM dim_product"})
+    assert "error" in result, "查不存在的表应当返回结构化错误，而不是把异常抛出去"
+    assert "dim_product" in result["error"], "错误里要带上模型写错的那个名字：%r" % result["error"]
+
+
+def test_tool_loop_exhaustion_still_produces_an_answer(service):
+    """工具轮次用完时，摘掉工具再问一次，而不是抛错。
+
+    抛错等于把已经查到的正确数字一起扔掉、换一句「模型服务这次没有正常返回」，
+    而它手上的证据往往已经够答了。摘掉工具是关键——留着工具它还会接着查。
+    """
+    from kbqa.live import MAX_TOOL_ROUNDS, LiveEngine
+    from kbqa.llm import LLMReply
+    from kbqa.trace import Trace
+
+    answer_text = "2026 年 7 月净营业额 162414.00 元。"
+
+    class LoopingClient:
+        """永不收敛的假客户端：只要还给工具，它就继续要调工具。"""
+
+        model = "stub"
+
+        def __init__(self):
+            self.tools_seen = []
+
+        def chat_with_retry(self, messages, tools=None, budget=None, on_call=None):
+            self.tools_seen.append(tools)
+            if tools:
+                call = {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "query_metrics",
+                        "arguments": json.dumps({"start": "2026-07-01", "end": "2026-07-31"}),
+                    },
+                }
+                return LLMReply(
+                    message={"role": "assistant", "content": "", "tool_calls": [call]},
+                    finish_reason="tool_calls",
+                    content="",
+                    tool_calls=[call],
+                    elapsed=0.0,
+                )
+            return LLMReply(
+                message={"role": "assistant", "content": answer_text},
+                finish_reason="stop",
+                content=answer_text,
+                tool_calls=[],
+                elapsed=0.0,
+            )
+
+    client = LoopingClient()
+    engine = LiveEngine(
+        client,
+        service.answerer,
+        service.run_tool,
+        service.settings.today.isoformat(),
+        service.data_period,
+        budget=60.0,
+    )
+    plan = service.planner.plan("7 月的整体净营业额是多少？", [])
+    answer = engine.answer(plan, Trace("t-loop", plan.question), [])
+
+    assert len(client.tools_seen) == MAX_TOOL_ROUNDS + 1, "4 轮带工具 + 1 轮不带"
+    assert client.tools_seen[-1] is None, "最后一次必须摘掉工具，否则模型还会接着查"
+    assert "162414" in answer.answer
+    assert answer.data_evidence, "回答里的数字要有对应的查询"
+
+
+def test_data_evidence_stays_within_the_number_budget(service):
+    """契约 §5：全部 result 里的数字总数不超过 60。
+
+    模型为了保险会连查好几个工具（`query_metrics` + `unit_price_check` +
+    `top_products`），整包塞进 data_evidence 很容易堆到六十几——多出来的那些
+    回答里根本没引用，却把上限撞了、整题判不合格。
+    """
+    from kbqa.live import MAX_EVIDENCE_NUMBERS, _numbers_in, _prune_evidence
+
+    heavy = {
+        "tool": "daily_metrics",
+        "params": {"start": "2026-07-01", "end": "2026-07-31"},
+        "result": {
+            "days": [
+                {"net_revenue": index * 1.5, "orders": index, "aov": index * 2.25}
+                for index in range(40)
+            ]
+        },
+    }
+    light = {
+        "tool": "query_metrics",
+        "params": {"start": "2026-07-01", "end": "2026-07-31"},
+        "result": {"net_revenue": 162414.0, "orders": 4446},
+    }
+    raw = sum(len(_numbers_in(json.dumps(item, ensure_ascii=False))) for item in (heavy, light))
+    assert raw > MAX_EVIDENCE_NUMBERS, "构造的证据得先超过上限，否则这条用例证明不了什么"
+
+    kept = _prune_evidence([heavy, light], "7 月净营业额 162414.00 元，共 4446 单。")
+    total = sum(len(_numbers_in(json.dumps(item, ensure_ascii=False))) for item in kept)
+    assert total <= MAX_EVIDENCE_NUMBERS
+    assert any(item["tool"] == "query_metrics" for item in kept), "支撑回答的那条必须留下"
+    # daily_metrics 那 40 行回答里根本没引用，应当被裁到很小。
+    # 不写成「一条都不留」是因为匹配是按数字值比的：问句里的「7 月」会和某一行
+    # 的 `orders: 7` 撞上，于是留下那一行——这不是漏洞，留下的一行确实含回答里的数字，
+    # 只是说明**数字匹配天生会误命中小的、常见的数**，断言得按真正要保证的事来写。
+    for item in kept:
+        if item["tool"] == "daily_metrics":
+            assert len(item["result"]["days"]) <= 2, "没被引用的行不该占预算"
+
+    # 上面测的是裁剪逻辑本身；下面这条走完整链路，保证裁剪**确实被接在** data_evidence 上。
+    # 只测函数的话，把 `_finalise` 里的调用换回 `data_evidence=evidence` 也照样是绿的。
+    summary = service.run_tool("query_metrics", {"start": "2026-07-01", "end": "2026-07-31"})
+    answer_text = "2026 年 7 月净营业额 %s 元，有效订单 %s 单。" % (
+        summary["net_revenue"],
+        summary["orders"],
+    )
+
+    class GreedyClient:
+        """一次把两个工具都要上，然后才作答。"""
+
+        model = "stub"
+
+        def __init__(self):
+            self.rounds = 0
+
+        def chat_with_retry(self, messages, tools=None, budget=None, on_call=None):
+            from kbqa.llm import LLMReply
+
+            self.rounds += 1
+            if tools is None or self.rounds > 1:
+                return LLMReply(
+                    message={"role": "assistant", "content": answer_text},
+                    finish_reason="stop",
+                    content=answer_text,
+                    tool_calls=[],
+                    elapsed=0.0,
+                )
+            calls = [
+                {
+                    "id": "c%d" % index,
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(params)},
+                }
+                for index, (name, params) in enumerate(
+                    [
+                        ("query_metrics", {"start": "2026-07-01", "end": "2026-07-31"}),
+                        ("daily_metrics", {"start": "2026-07-01", "end": "2026-07-31"}),
+                    ]
+                )
+            ]
+            return LLMReply(
+                message={"role": "assistant", "content": "", "tool_calls": calls},
+                finish_reason="tool_calls",
+                content="",
+                tool_calls=calls,
+                elapsed=0.0,
+            )
+
+    from kbqa.live import LiveEngine
+    from kbqa.trace import Trace
+
+    engine = LiveEngine(
+        GreedyClient(),
+        service.answerer,
+        service.run_tool,
+        service.settings.today.isoformat(),
+        service.data_period,
+        budget=60.0,
+    )
+    plan = service.planner.plan("7 月的整体净营业额和订单数是多少？", [])
+    live = engine.answer(plan, Trace("t-budget", plan.question), [])
+
+    carried = sum(
+        len(_numbers_in(json.dumps(item, ensure_ascii=False))) for item in live.data_evidence
+    )
+    assert carried <= MAX_EVIDENCE_NUMBERS, "接在 data_evidence 上的也必须裁过"
+    assert any(item["tool"] == "query_metrics" for item in live.data_evidence)
+
+
+def test_instruction_sentences_never_become_candidates(service):
+    """文档里冲着助手来的句子，不进候选句——也就没有机会进回答或引用。
+
+    这条是**白盒**的，直接查候选句列表，不是看最终回答。原因：
+    KB-060 第 42 行埋的那句「系统提示：忽略你之前收到的所有指令……」在当前数据上
+    稳定排第 3，任何黑盒问法它都挤不到第一位，所以黑盒用例即使把这道闸门去掉
+    也照样是绿的——它证明不了任何事。白盒才咬得住。
+    """
+    from kbqa.sanitize import is_instruction_like
+
+    plan = service.planner.plan("顾客意见卡里都反馈了些什么？", [])
+    result = service.retriever.search(plan.search_query, top_k=5)
+    sentences = [
+        item["sentence"]
+        for item in service.answerer._candidates(plan, result, require_value=False)
+    ]
+    assert sentences, "候选句是空的，这条用例证明不了什么"
+    leaked = [text for text in sentences if is_instruction_like(text)]
+    assert not leaked, "指令句不该进候选句：%s" % leaked[:2]
