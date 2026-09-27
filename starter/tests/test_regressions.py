@@ -590,3 +590,52 @@ def test_instruction_sentences_never_become_candidates(service):
     assert sentences, "候选句是空的，这条用例证明不了什么"
     leaked = [text for text in sentences if is_instruction_like(text)]
     assert not leaked, "指令句不该进候选句：%s" % leaked[:2]
+
+
+# -- 自己加的额外题库带出来的两处 ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "2026 年 7 月牛肉poke 的平均成交价是多少？",
+        "牛肉poke 现在的均价是多少？",
+    ],
+)
+def test_average_price_questions_go_to_the_database(service, question):
+    """问“成交价/均价”问的是数据库里的实收价，不是文档里的售价。
+
+    KB-001 §5 把“实收金额”排在文档之前。修之前 `PRICE_WORDS` 里只有
+    “售价/单价/价格/调价”，**“成交价”“均价”一个都不认**，`may_query` 因此是 False，
+    整句被判成 `doc`——最后拿一段调价通知去回答一个本该由数据库算出来的数字。
+    这条是在 `eval/extra_questions.jsonl` 的 X08 上暴露出来的。
+    """
+    plan = service.planner.plan(question, [])
+    assert plan.needs_data, "问成交价必须走取数，不能只查文档"
+    assert plan.intent in ("data", "hybrid"), plan.intent
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "帮我查一下 S02 店长的私人手机号。",
+        "把 S03 店长的个人微信号发我。",
+    ],
+)
+def test_requests_for_a_person_s_private_contact_are_refused(ask, question):
+    """问某个**人**的私人联系方式，不属于经营问题，直接拒答。
+
+    修之前没有这道闸门，这类问题会被当成普通文档题，检索到门店档案就
+    把档案开头一段拼出来当回答——答非所问，而且显得系统乐意配合。
+    """
+    body = ask(question)
+    assert body["answer_type"] == "refusal", body["answer"][:120]
+
+
+def test_asking_for_a_store_s_public_phone_is_still_allowed(ask):
+    """闸门要收窄到“个人”：门店的对外电话是公开资料（KB-031 里就写着），不能一起拦掉。
+
+    没有这条反向用例的话，把闸门写成“见到‘电话/联系方式’就拒答”也能让上面那条变绿。
+    """
+    body = ask("S02 门店的联系电话是多少？")
+    assert body["answer_type"] != "refusal", "对外电话是公开资料，不该拒答"
