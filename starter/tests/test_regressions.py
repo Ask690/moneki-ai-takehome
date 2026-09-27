@@ -67,3 +67,24 @@ def test_date_range_is_inclusive_on_both_ends(service):
 
     wider = service.tools.query_metrics(day, "2026-06-16")
     assert wider["net_revenue"] > one_day["net_revenue"]
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DROP TABLE sales_clean",
+        "DELETE FROM sales_clean",
+        "UPDATE sales_clean SET amount_cents = 0",
+        "INSERT INTO sales_clean VALUES (1)",
+        "SELECT 1; DROP TABLE sales_clean",
+    ],
+)
+def test_run_sql_rejects_writes(service, sql):
+    """契约 §5：任何请求都不能改动数据库。
+
+    走 `run_tool` 而不是直接调 `run_sql`——模型看到的错误必须是一条结构化的
+    `{"error": ...}`，而不是一个把整轮对话打断的异常。
+    """
+    result = service.run_tool("run_sql", {"sql": sql})
+    assert "error" in result, "应当被拒绝：%s" % sql
+
+    rows = service.tools.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0]
+    assert rows == 18290, "数据库一个字节都不该被改动"
