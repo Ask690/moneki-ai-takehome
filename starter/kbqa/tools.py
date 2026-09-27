@@ -50,7 +50,8 @@ class DataTools:
             self._local.conn = None
 
     def _where(self, start: str, end: str, store_id=None, product_id=None) -> tuple[str, list]:
-        clause = ["date >= ?", "date < ?"]
+        # 契约 §2：start / end 是闭区间，两端都要算进来。
+        clause = ["date >= ?", "date <= ?"]
         params: list[Any] = [start, end]
         if store_id:
             clause.append("store_id = ?")
