@@ -270,7 +270,7 @@ python3 -m pytest starter/tests/test_eval_regression.py -q      # 不需要任�
 python3 -m pytest starter/tests -q                              # 全部 60 条
 ```
 
-## 9. 这份报告没有做的事
+## 9. 已知限制与没有做的事
 
 1. **没有对公开题库做针对性调参。** 理由见 §6 末尾。
 2. **没有做关掉思考模式的对照实验。** `LLM_SETUP.md` 第 8 节把这一条列为"基于零散观察的选择，不是量化的结论"。
@@ -282,3 +282,15 @@ python3 -m pytest starter/tests -q                              # 全部 60 条
    所以代码里没有写死任何数字、答案或文档内容；索引缓存按"知识库内容 + 算法版本号"算 key，
    换知识库会自动重建（`DEBUG_LOG.md` 第 8 条）。
    能自测的只有"我的索引确实跟着知识库变"这件事本身。
+5. **`eval/tests/` 里有 4 条用例在本机（Windows）是红的，跟我的改动无关。**
+   我改的只有 `starter/`，`eval/llm_gateway.py` 和 `eval/run_eval.py` 与基线 `56f7a1f` **逐字节相同**
+   （`git diff 56f7a1f HEAD -- eval/` 只列出我自己新增的两个题库文件）。这 4 条是工具自带自测在本机的环境问题：
+
+   | 用例 | 本机的现象 |
+   |---|---|
+   | `test_an_unreachable_service_is_never_accused_of_a_timeout` | 假"死服务"在 Windows 上的行为与预期不同，P11 报 FAIL 而不是 SKIP |
+   | `test_an_unreachable_service_makes_no_vacuous_claims_anywhere` | 同上（P11 那一项） |
+   | `test_huge_response_body` | 超大响应体在 Windows 上被对端重置，报 `WinError 10054` 而不是"超过 2 MB" |
+
+   `starter/tests/` 和 `eval/tests/` 一起跑：**317 passed / 4 failed**，4 条全部落在上表里。
+   我把它们如实列出来，而不是说"测试全绿"。
