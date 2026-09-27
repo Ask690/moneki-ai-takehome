@@ -88,7 +88,8 @@ class Answerer(HybridAnswers):
         # 曾经这里写成 `sort(key=lambda item: (round(score, 2), effective_from))`——
         # 一个升序的元组键，于是**分数最低的那句排在最前**，而下面是从第一个开始取。
         # 答案因此长期是“最不像答案的那一句”，`best` 参照的也是它。
-        candidates.sort(key=lambda item: (round(item["score"], 2), item["effective_from"]))
+        candidates.sort(key=lambda item: item["effective_from"], reverse=True)
+        candidates.sort(key=lambda item: -round(item["score"], 2))
         lines: list[str] = []
         citations: list[dict] = []
         used_terms: set[str] = set()
