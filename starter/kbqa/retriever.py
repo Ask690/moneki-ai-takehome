@@ -9,6 +9,8 @@ from typing import Optional
 
 from .entities import wants_historical
 from .index import BM25Index, load_index
+from .loader import doc_status
+from .sanitize import sanitize
 from .tokenizer import content_tokens, tokenize
 
 ALIAS_WEIGHT = 0.6
@@ -117,7 +119,7 @@ class Retriever:
             return None
         ends = self._effective_to.get(doc_id)
         # 只有标了“已废止”的才按取代关系挡掉，别的版本照常参与打分。
-        if meta.get("status") == "已废止" and ends and as_of.isoformat() >= ends:
+        if doc_status(meta) == "已废止" and ends and as_of.isoformat() >= ends:
             return "该版本自 %s 起已被 %s 取代" % (ends, meta.get("superseded_by"))
         starts = meta.get("effective_from")
         if starts and starts > as_of.isoformat() and doc_id in self._in_chain:
@@ -203,6 +205,9 @@ class Retriever:
 
     def _hit(self, position: int, score: float, filtered: list[dict], padded: bool = False) -> Hit:
         chunk = self.index.chunks[position]
+        # 这个片段里有哪些句子是“冲着助手来的指令”。记下来给调试面板看，
+        # 实际作答时 answerer 会把它们整句跳过（文档只当资料，不当指令执行）。
+        _, dropped = sanitize(chunk.text)
         return Hit(
             doc_id=chunk.doc_id,
             chunk_id=chunk.chunk_id,
@@ -212,6 +217,7 @@ class Retriever:
             meta=self.index.docs_meta.get(chunk.doc_id, {}),
             kind=chunk.kind,
             table_header=chunk.table_header,
+            dropped_instructions=dropped,
             padded=padded,
         )
 
@@ -237,7 +243,13 @@ class Retriever:
             if reason:
                 excluded.add(doc_id)
                 filtered.append({"doc_id": doc_id, "reason": reason})
-        allowed = set(range(len(self.index.chunks)))
+        # 契约 §4：先过滤再取前 top_k。反过来的话，被挡掉的版本会先占掉格子，
+        # 再被剔掉，结果只剩两三条，而且剩下的不是最相关的。
+        allowed = {
+            position
+            for position, chunk in enumerate(self.index.chunks)
+            if chunk.doc_id not in excluded
+        }
 
         scores = self.index.score_terms(self._weights(query), allowed)
         concepts, expansions = self._concept_scores(query, allowed)
@@ -261,7 +273,6 @@ class Retriever:
             )
         adjusted.sort(key=lambda item: (-item[0], item[1]))
 
-        ordered = [self.index.chunks[position] for _, position in adjusted]
         hits: list[Hit] = []
         taken: set[int] = set()
         per_doc: dict[str, int] = {}
@@ -271,10 +282,10 @@ class Retriever:
                 continue
             per_doc[chunk.doc_id] = per_doc.get(chunk.doc_id, 0) + 1
             taken.add(position)
-            hit = self._hit(position, score, filtered)
-            # 第几条命中就取排序里的第几篇文档。
-            hit.doc_id = ordered[len(hits)].doc_id
-            hits.append(hit)
+            # doc_id / chunk_id 都取自命中的那个片段本身。
+            # 曾经这里按“第几条命中”去 ordered 里另取一篇文档的 doc_id，
+            # 一旦某个片段因为每篇只留一格被跳过，doc_id 就和 chunk_id 对不上了。
+            hits.append(self._hit(position, score, filtered))
             if len(hits) >= top_k:
                 break
 
