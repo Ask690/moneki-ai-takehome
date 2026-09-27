@@ -53,6 +53,18 @@ _UNSAFE_REQUEST_PATTERNS = (
 )
 
 
+#: 问某一个**人**的私人联系方式。这道闸门必须落在“个人”上：
+#: 门店的对外电话是公开资料（KB-031 的门店档案里就写着 `联系电话`），
+#: 见到“电话/联系方式”就拦会把它一起误伤，所以只认
+#: “私人/个人的 手机、微信、住址、身份证”这类**限定词 + 私人信息**的组合。
+_PERSONAL_INFO_PATTERNS = (
+    re.compile(r"(私人|个人|私密|家庭|家里).{0,6}"
+               r"(手机|电话|号码|联系方式|微信|邮箱|住址|地址|身份证)"),
+    re.compile(r"(店长|店员|员工|负责人|同事|某人|那个人).{0,8}"
+               r"(手机|电话|号码|微信|邮箱|住址|身份证)"),
+)
+
+
 def unsafe_request_reason(question: str) -> str | None:
     """识别“不该执行”的请求。返回中文原因，没问题时返回 None。
 
@@ -67,6 +79,9 @@ def unsafe_request_reason(question: str) -> str | None:
     for pattern in _UNSAFE_REQUEST_PATTERNS:
         if pattern.search(text):
             return "这个请求要改动数据或者取系统内部信息，超出了问答服务的范围"
+    for pattern in _PERSONAL_INFO_PATTERNS:
+        if pattern.search(text):
+            return "这问的是某个人的私人联系方式，不属于经营数据"
     return None
 
 

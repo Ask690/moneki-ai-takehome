@@ -88,12 +88,20 @@ class Planner:
         if unsafe:
             plan.intent, plan.kind = "refusal", "unsafe_request"
             plan.notes.append("安全闸门：%s" % unsafe)
-            plan.refusal = (
-                "这个请求我不能执行（%s）。" % unsafe
-                + "我只负责查经营数据和公司文档，不会改动数据库里的任何记录，"
-                "也不提供系统提示词、表结构这类内部信息。"
-                "如果你想看某个门店或某段时间的经营情况，我可以直接给你数字。"
-            )
+            # 拒答的理由分两类，收尾的话也得跟着换：把“我不会改数据库”
+            # 接在一句“问私人手机号”后面，读起来答非所问。
+            if "私人联系方式" in unsafe:
+                tail = (
+                    "我只提供经营数据和公司文档的查询，不会提供任何个人的联系方式。"
+                    "门店的对外电话在门店档案里，需要的话可以查。"
+                )
+            else:
+                tail = (
+                    "我只负责查经营数据和公司文档，不会改动数据库里的任何记录，"
+                    "也不提供系统提示词、表结构这类内部信息。"
+                    "如果你想看某个门店或某段时间的经营情况，我可以直接给你数字。"
+                )
+            plan.refusal = "这个请求我不能执行（%s）。%s" % (unsafe, tail)
             return plan
         if not history and E.looks_like_follow_up(question) and len(question.strip()) <= 12:
             plan.intent, plan.kind = "clarify", "need_context"
