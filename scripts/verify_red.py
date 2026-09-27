@@ -19,7 +19,20 @@ PY = ROOT / ".venv" / "Scripts" / "python.exe"
 if not PY.exists():
     PY = Path(sys.executable)
 
+TESTS_DIR = ROOT / "starter" / "tests"
 TESTS = "starter/tests/test_regressions.py"
+
+
+def test_file(name: str) -> str:
+    """这个用例在哪个文件里。
+
+    绝大多数回归用例在 `test_regressions.py`；后来加的功能（比如手动切换引擎）
+    有自己的文件，用 `pytest 文件::用例` 得先找到那个文件。
+    """
+    for path in sorted(TESTS_DIR.glob("test_*.py")):
+        if ("def %s(" % name) in path.read_text(encoding="utf-8"):
+            return str(path.relative_to(ROOT))
+    return TESTS
 
 # 每条缺陷一处或多处替换：`edits` 里是 (文件, 修好之后的写法, 打回缺陷之后的写法)。
 # 一处缺陷要同时改两个文件时（比如键名错位既在写的一端也在读的一端），
@@ -450,6 +463,19 @@ CASES: list[tuple[str, str, str, list[tuple[str, str, str]]]] = [
             )
         ],
     ),
+    # -- 引擎切换 ---------------------------------------------------------------
+    (
+        "引擎切换",
+        "路由只看环境变量，手动切到降级之后照样去调模型",
+        "test_switching_to_mock_actually_skips_the_model",
+        [
+            (
+                "starter/kbqa/service.py",
+                '        if self.answer_engine == "mock" or plan.intent == "refusal":',
+                '        if not self.settings.live or plan.intent == "refusal":',
+            )
+        ],
+    ),
 ]
 
 
@@ -465,7 +491,7 @@ def run_test(name: str) -> bool:
     if cache.exists():
         cache.unlink()
     proc = subprocess.run(
-        [str(PY), "-m", "pytest", "%s::%s" % (TESTS, name), "-q", "--no-header", "-x"],
+        [str(PY), "-m", "pytest", "%s::%s" % (test_file(name), name), "-q", "--no-header", "-x"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,

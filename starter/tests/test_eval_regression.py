@@ -116,7 +116,12 @@ def test_public_question_set_does_not_regress(tmp_path):
         except subprocess.TimeoutExpired:  # pragma: no cover - 收不掉就算了
             server.kill()
 
-    assert report["health"]["llm_mode"] == "mock", "这条用例必须跑在降级模式上"
+    # 两个都要断言，而且**判据是 `answer_engine`**：它是"这次真的走了哪条路"。
+    # `llm_mode` 只是"有没有配 Key"，自从加了手动切换，光看它不足以说明
+    # 这轮跑分没经过模型——虽然这条用例起的是自己的服务、开关拨不到它头上，
+    # 但这里要证明的恰恰是"跑的是确定性的那条路"，就该按那个来断言。
+    assert report["health"]["llm_mode"] == "mock", "这条用例必须跑在没配 Key 的服务上"
+    assert report["health"]["answer_engine"] == "mock", "这条用例必须跑在降级路径上"
 
     total = report["total"]
     failed = [q["id"] for q in report["questions"] if not q["passed"]]

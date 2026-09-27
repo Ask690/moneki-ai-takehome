@@ -190,7 +190,7 @@ retriever.search("储值充值赠送规则", as_of=date(2026, 6, 30))   # 换成
 ```
 
 两个方向都验证了，才把它写成一条红用例（`test_live_mode_search_keeps_the_version_context`），
-再改代码。修完之后当时那 60 条测试全绿（后来补了 4 条，现在是 64 条，见 §8），
+再改代码。修完之后当时那 60 条测试全绿（后来陆续补了 12 条，现在是 72 条，见 §8），
 第 11 次运行里 V01/V02/V03/H02 **一次都没再出现**。
 
 第 11 次剩下的 `T02` 是**另一类问题，不是抖动**，我核到了具体原因：
@@ -299,7 +299,7 @@ live 的分数靠这份报告里的人工记录守。
 
 ```bash
 python3 -m pytest starter/tests/test_eval_regression.py -q      # 不需要任何 Key
-python3 -m pytest starter/tests -q                              # 全部 64 条
+python3 -m pytest starter/tests -q                              # 全部 72 条
 ```
 
 ## 9. 已知限制与没有做的事
