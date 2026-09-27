@@ -1,0 +1,18 @@
+# 本机产物，不入库
+.venv/
+var/
+__pycache__/
+*.pyc
+
+# 评测与预检产物
+run_*/
+baseline_run/
+preflight_out.txt
+
+# 服务日志
+*.log
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store
